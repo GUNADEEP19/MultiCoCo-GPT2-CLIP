@@ -11,12 +11,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
+from torch.cuda.amp import autocast, GradScaler  # AMP for mixed precision
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", help="Path to YAML config")
     args = parser.parse_args()
 
+    # ─── Load config ─────────────────────────────────────────────────
     with open(args.config_file) as f:
         cfg = yaml.safe_load(f)
     configs = Config(cfg)
@@ -24,6 +26,7 @@ def main():
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
 
+    # ─── W&B Login & Init ────────────────────────────────────────────
     wandb.login()
     wandb_run = wandb.init(
         project=configs.project,
@@ -32,26 +35,29 @@ def main():
         reinit=True
     )
 
+    # ─── Repro & Device ───────────────────────────────────────────────
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Prepare save dir & resume checkpoint
+    # ─── Prepare dirs & Resume ────────────────────────────────────────
     save_dir = os.path.join(configs.save_path, configs.name)
     os.makedirs(save_dir, exist_ok=True)
 
     start_epoch = configs.resume
+    ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
+
+    # ─── Load model & tokenizer ──────────────────────────────────────
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Special tokens
     special_tokens = ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     tokenizer.add_tokens(special_tokens)
     model.resize_token_embeddings(len(tokenizer))
 
     LATENT_ID = tokenizer.convert_tokens_to_ids("<|latent|>")
-    START_ID  = tokenizer.convert_tokens_to_ids("<|start-latent|>")
-    END_ID    = tokenizer.convert_tokens_to_ids("<|end-latent|>")
+    START_ID = tokenizer.convert_tokens_to_ids("<|start-latent|>")
+    END_ID = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
     if configs.coconut:
         model = Coconut(
@@ -63,23 +69,27 @@ def main():
         )
 
     model = model.to(device)
+
     if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
+        print("Using", torch.cuda.device_count(), "GPUs")
         model = torch.nn.DataParallel(model)
 
-    if start_epoch > 0:
-        ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt")
-        print(f"[resume] Loading checkpoint from {ckpt_path}")
-        state = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(state)
+    if ckpt_path and os.path.exists(ckpt_path):
+        print(f"[Resume] Loading checkpoint from {ckpt_path}")
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
-    # Dataset
+    # ─── Load data & collator ─────────────────────────────────────────
     train_data = get_dataset(configs.train_path)
-    val_data   = get_dataset(configs.val_path)
+    val_data = get_dataset(configs.val_path)
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
-    # FP16 scaler
-    scaler = torch.cuda.amp.GradScaler()
+    # ─── Optimizer & AMP ──────────────────────────────────────────────
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=configs.lr,
+        weight_decay=configs.weight_decay
+    )
+    scaler = GradScaler()  # for mixed precision
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
@@ -94,18 +104,12 @@ def main():
             collate_fn=collator,
         )
 
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=configs.lr,
-            weight_decay=configs.weight_decay
-        )
-
         model.train()
         pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=False)
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
-            with torch.cuda.amp.autocast():
+            with autocast():  # Mixed Precision
                 outputs = model(**batch)
                 loss = outputs.loss
 

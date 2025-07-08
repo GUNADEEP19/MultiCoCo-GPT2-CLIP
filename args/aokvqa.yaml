@@ -1,20 +1,21 @@
-name: run_1_aokvqa_baseline
+name: coconut_aokvqa_gunadeep
 model_id: gpt2
 
 seed: 42
-bf16: false
+bf16: false  # Not using bf16; using fp16 (via AMP)
 project: coconut_aokvqa_guna
+name: run_1_aokvqa_baseline
 
-# Paths
+# Paths (update to correct location in Kaggle)
 save_path: checkpoints
 load_model_path: null
-resume: 0
+resume: 0  # Set to N if you want to resume from checkpoint_N.pt
 reset_optimizer: false
 only_eval: false
 save_only_improve: true
 
 train_path: /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_train.json
-val_path:   /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
+val_path: /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
 
 debug: false
 no_thoughts: false
