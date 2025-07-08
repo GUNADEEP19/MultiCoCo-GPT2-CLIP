@@ -1,166 +1,172 @@
-Absolutely! Here's a `README.md` content tailored for your **Coconut-style multimodal latent reasoning training pipeline** using GPT-2 + CLIP on the A-OKVQA dataset, with support for curriculum learning, mixed precision (fp16), and checkpoint resuming — ideal for a GitHub repository.
+Here is a clean, structured and professional **`README.md`** file tailored for your multimodal Coconut-style reasoning project using **GPT-2 + CLIP** on **A-OKVQA**.
 
 ---
 
-```markdown
-# 🥥 Multimodal Coconut: Latent Reasoning with GPT-2 + CLIP on A-OKVQA
+````markdown
+# 🥥 Multimodal Latent Reasoning with GPT-2 + CLIP (Coconut-style)
 
-This repository contains an implementation of a **Coconut-style latent reasoning framework** that trains a multimodal model combining **GPT-2** (text) and **CLIP** (vision) on the **A-OKVQA** dataset. The model is trained in **curriculum stages** by injecting "latent thought" tokens into the reasoning process.
-
-## 🚀 Features
-
-- 🔍 **Latent token reasoning** stages via curriculum learning
-- 🧠 **Multimodal** input support: text + image (via CLIP)
-- ⚡️ Mixed precision training with **AMP (fp16)** for faster training
-- 🎮 GPT-2 as the backbone causal LM with latent token injection
-- 🔁 Resume training from any saved epoch checkpoint
-- 📈 Integrated with **Weights & Biases (wandb)** for experiment tracking
-- 🧰 Modular and readable PyTorch code
+This project implements a Coconut-style latent reasoning framework combining **GPT-2** (for text) and **CLIP** (for vision) to solve multimodal question answering tasks like **A-OKVQA**. It supports training with **latent tokens**, curriculum learning, and stage-wise reasoning injection.
 
 ---
 
-## 🗂️ Project Structure
+## 🚀 Overview
 
-```
+Inspired by Meta's **Coconut** paper, this project injects latent "thought" tokens between question and answer to simulate intermediate reasoning steps. It integrates:
+- **GPT-2** as the language model,
+- **CLIP** as the vision encoder,
+- Custom logic for staged reasoning over multiple epochs.
 
-├── run.py                  # Training pipeline (multi-GPU, mixed precision)
-├── coconut.py              # Coconut model with latent token reasoning
-├── dataset.py              # Dataset loader (A-OKVQA style with "steps")
-├── args/
-│   ├── aokvqa.yaml         # YAML config for training
-├── data/
-│   ├── Datasets/A-OKVQA/
-│       ├── aokvqa\_train.json
-│       ├── aokvqa\_validation.json
-├── checkpoints/            # Saved checkpoints (checkpoint\_1.pt, ...)
-├── wandb/                  # wandb logs (auto-generated)
+---
 
+## 🧠 What Are We Training?
+
+We are training a **multimodal latent reasoning model** to:
+- Take **textual questions** and corresponding **images**,
+- Insert stage-wise **latent reasoning steps** (via `<|latent|>` tokens),
+- Predict the **correct answer** based on reasoning and visual context.
+
+---
+
+## 📁 Project Structure
+
+| File | Purpose |
+|------|---------|
+| `run.py` | Entry point to train the model. Handles config parsing, checkpointing, W&B logging, curriculum training, and mixed precision AMP. |
+| `coconut.py` | Implements the custom `Coconut` model class. Wraps GPT-2 + CLIP and handles stage-wise latent token reasoning and image embedding injection. |
+| `dataset.py` | Dataset and dataloader logic. Loads `.json` files, encodes latent tokens, and handles stage-wise reasoning logic with padding and attention. |
+| `args/aokvqa.yaml` | YAML configuration for training on A-OKVQA with curriculum learning and W&B tracking. |
+
+---
+
+## 📦 Dependencies
+
+Make sure to install the following:
+
+```bash
+pip install torch torchvision transformers datasets wandb
 ````
 
+Or use the environment available on **Kaggle / Colab / your own virtualenv**.
+
 ---
 
-## 🧪 Dataset Format
+## 📚 Dataset Format (A-OKVQA)
 
-Each `.json` file should be a list of dicts like:
+Each sample in `aokvqa_train.json` follows this schema:
 
 ```json
 {
   "image": "path/to/image.jpg",
-  "question": "What is shown in the image? The choices are 0: cat, 1: dog, 2: horse",
-  "steps": ["The animal has pointy ears.", "It is commonly kept as a pet."],
+  "question": "What is the man doing? The choices are 0 : sleeping, 1 : running, 2 : eating",
+  "steps": ["The man is lying on a bed", "He looks relaxed"],
   "answer": "0"
 }
-````
-
-Ensure `"answer"` is string-formatted (e.g., `"0"` not `0`) for tokenizer compatibility.
-
----
-
-## ⚙️ Setup
-
-```bash
-git clone https://github.com/your-username/Multimodal-Coconut-GPT2-CLIP.git
-cd Multimodal-Coconut-GPT2-CLIP
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Login to Weights & Biases (optional but recommended)
-wandb login
 ```
 
+You should provide both:
+
+* `aokvqa_train.json`
+* `aokvqa_validation.json`
+
 ---
 
-## 🏃 Training
+## 🏁 Training Instructions
 
-To start training on **A-OKVQA**, run:
+To start training:
 
 ```bash
 python run.py args/aokvqa.yaml
 ```
 
-If resuming from checkpoint (e.g., epoch 10), modify your `aokvqa.yaml`:
+This supports:
+
+* Resuming from checkpoints
+* Logging to W\&B
+* Mixed precision (fp16) with AMP
+* Curriculum learning via `epochs_per_stage`
+
+---
+
+## ⚙️ Configuration (`args/aokvqa.yaml`)
 
 ```yaml
+name: coconut_aokvqa_gunadeep
+model_id: gpt2
+project: coconut_aokvqa_guna
+resume: 0
+train_path: /path/to/aokvqa_train.json
+val_path: /path/to/aokvqa_validation.json
+coconut: true
+num_epochs: 25
+batch_size_training: 3
+c_thought: 2
+max_latent_stage: 8
+epochs_per_stage: 2
+lr: 5e-5
+save_path: checkpoints
+```
+
+> To resume from a checkpoint (e.g., `checkpoint_10.pt`), just set:
+>
+> ```yaml
+> resume: 10
+> ```
+
+---
+
+## 🧪 Evaluation & Inference
+
+Evaluation loop is not included yet, but can be integrated similarly to training using `.generate()` in `coconut.py`.
+
+---
+
+## 📈 Logging with Weights & Biases
+
+Track training progress via [W\&B dashboard](https://wandb.ai/gunadeep2005-pes-university/coconut_aokvqa_guna).
+
+```bash
+wandb login
+```
+
+---
+
+## 🧊 Checkpoints & Resuming
+
+All model checkpoints are saved under:
+
+```
+checkpoints/coconut_aokvqa_gunadeep/checkpoint_{epoch}.pt
+```
+
+To resume training:
+
+```bash
+# Set this in your yaml:
 resume: 10
 ```
 
 ---
 
-## 🧠 Model
+## 💡 Future Enhancements
 
-This trains a **Coconut-style GPT-2 + CLIP hybrid** that:
-
-* Takes image features from CLIP
-* Injects them into GPT-2’s first token embedding
-* Inserts a variable number of `<|latent|>` tokens
-* Learns to fill in those tokens with latent steps
-* Finally generates the answer
+* Evaluation & accuracy metrics
+* Support for other vision models (e.g. DINOv2)
+* Integration with Hugging Face `Trainer`
+* Inference demo notebook
 
 ---
 
-## 🧮 Config: `aokvqa.yaml`
+## 🙏 Acknowledgements
 
-```yaml
-name: run_1_aokvqa_baseline
-model_id: gpt2
-project: coconut_aokvqa_guna
-seed: 42
-
-train_path: data/Datasets/A-OKVQA/aokvqa_train.json
-val_path: data/Datasets/A-OKVQA/aokvqa_validation.json
-save_path: checkpoints
-
-coconut: true
-num_epochs: 25
-epochs_per_stage: 2
-c_thought: 2
-max_latent_stage: 8
-pad_latent_to_max: true
-uniform_prob: 0.1
-
-batch_size_training: 3
-lr: 5e-5
-resume: 0
-```
-
----
-
-## 🧠 Example WandB Project
-
-> 🔗 [Click here to see example run](https://wandb.ai/gunadeep2005-pes-university/coconut_aokvqa_guna)
-
----
-
-## 📌 Notes
-
-* Ensure your image paths in the JSON are valid.
-* All training is designed to run on multi-GPU (e.g., Kaggle 2×T4 or Colab Pro+).
-* Automatically saves checkpoints every epoch.
-* Resume training by editing `resume:` value in `.yaml`.
-
----
-
-## 🤝 Acknowledgments
-
-* [Meta's Coconut Model](https://arxiv.org/abs/2402.06304)
+* [Coconut Paper (Meta, 2023)](https://arxiv.org/abs/2312.06769)
 * [A-OKVQA Dataset](https://huggingface.co/datasets/HuggingFaceM4/A-OKVQA)
-* [CLIP by OpenAI](https://openai.com/research/clip)
-* HuggingFace Transformers + Datasets
+* OpenAI's [CLIP](https://github.com/openai/CLIP)
+* Hugging Face Transformers
 
 ---
 
-## 📜 License
+## 📝 License
 
-This project is released under the MIT License.
-
-```
+MIT License. Copyright © 2025
 
 ---
-
-Would you like me to generate this into a downloadable `README.md` file or include an image diagram (e.g., model flow)?
-```
