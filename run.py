@@ -11,7 +11,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-from torch.cuda.amp import autocast, GradScaler  # AMP for mixed precision
+from torch.amp import autocast, GradScaler  # AMP for mixed precision
 
 def main():
     parser = argparse.ArgumentParser()
@@ -89,7 +89,7 @@ def main():
         lr=configs.lr,
         weight_decay=configs.weight_decay
     )
-    scaler = GradScaler()  # for mixed precision
+    scaler = GradScaler('cuda')  # for mixed precision
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
@@ -109,7 +109,7 @@ def main():
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
-            with autocast():  # Mixed Precision
+            with autocast('cuda'):  # Mixed Precision
                 outputs = model(**batch)
                 loss = outputs.loss
 

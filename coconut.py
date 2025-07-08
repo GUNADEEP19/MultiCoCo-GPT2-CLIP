@@ -138,8 +138,10 @@ class Coconut(nn.Module):
 
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
-        loss_fct = CrossEntropyLoss()
-        loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+        loss_fct = CrossEntropyLoss(reduction='mean')
+        loss = loss_fct(
+            shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+        )
 
         return Outputs(loss=loss, inputs_embeds=inputs_embeds, logits=logits)
 
