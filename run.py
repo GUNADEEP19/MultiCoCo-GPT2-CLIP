@@ -5,13 +5,18 @@ import wandb
 import argparse
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from tqdm.notebook import tqdm  # 👍 Notebook-friendly tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
 from torch.amp import autocast, GradScaler  # AMP for mixed precision
+
+# Fix for duplicated tqdm lines in Jupyter/Kaggle
+from IPython.core.interactiveshell import InteractiveShell
+InteractiveShell.ast_node_interactivity = "last_expr"
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -51,6 +56,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
+    # Add Coconut special tokens
     special_tokens = ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     tokenizer.add_tokens(special_tokens)
     model.resize_token_embeddings(len(tokenizer))
@@ -71,25 +77,22 @@ def main():
     model = model.to(device)
 
     if torch.cuda.device_count() > 1:
-        print("Using", torch.cuda.device_count(), "GPUs")
+        print("✅ Using", torch.cuda.device_count(), "GPUs")
         model = torch.nn.DataParallel(model)
 
     if ckpt_path and os.path.exists(ckpt_path):
-        print(f"[Resume] Loading checkpoint from {ckpt_path}")
+        print(f"🔁 Resuming from checkpoint: {ckpt_path}")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
-    # ─── Load data & collator ─────────────────────────────────────────
+    # ─── Load Data ────────────────────────────────────────────────────
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
-    # ─── Optimizer & AMP ──────────────────────────────────────────────
     optimizer = optim.AdamW(
-        model.parameters(),
-        lr=configs.lr,
-        weight_decay=configs.weight_decay
+        model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay
     )
-    scaler = GradScaler('cuda')  # for mixed precision
+    scaler = GradScaler("cuda")  # AMP mixed-precision
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
@@ -105,20 +108,13 @@ def main():
         )
 
         model.train()
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=True, dynamic_ncols=True)
+        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=True, ncols=100)
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
-            with autocast('cuda'):
+            with autocast("cuda"):
                 outputs = model(**batch)
-
-                # ⚠️ Fix for DataParallel (tuple output)
-                if isinstance(outputs, tuple):
-                    loss = outputs[0]
-                else:
-                    loss = outputs.loss
-
-                # ⚠️ Ensure scalar
+                loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
                 if loss.dim() != 0:
                     loss = loss.mean()
 
@@ -128,7 +124,7 @@ def main():
             optimizer.zero_grad()
 
             global_step += 1
-            pbar.set_postfix_str(f"loss={loss.item():.4f}")
+            pbar.set_postfix(loss=round(loss.item(), 4))
 
             wandb_run.log({
                 "train/loss": loss.item(),
@@ -143,6 +139,7 @@ def main():
         wandb.save(ckpt_path)
 
     wandb_run.finish()
+
 
 if __name__ == "__main__":
     main()
