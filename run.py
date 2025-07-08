@@ -109,14 +109,18 @@ def main():
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
-            with autocast('cuda'):  # Mixed Precision
+            with autocast('cuda'):
                 outputs = model(**batch)
 
-                # Fix: Handle DataParallel wrapping
+                # ⚠️ Fix for DataParallel (tuple output)
                 if isinstance(outputs, tuple):
                     loss = outputs[0]
                 else:
                     loss = outputs.loss
+
+                # ⚠️ Ensure scalar
+                if loss.dim() != 0:
+                    loss = loss.mean()
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
