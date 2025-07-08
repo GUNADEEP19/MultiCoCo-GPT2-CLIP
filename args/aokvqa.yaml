@@ -33,6 +33,6 @@ uniform_prob: 0.1
 # Training configs
 num_epochs: 25
 gradient_accumulation_steps: 1
-batch_size_training: 3
+batch_size_training: 6
 lr: 5e-5
 weight_decay: 0.0
