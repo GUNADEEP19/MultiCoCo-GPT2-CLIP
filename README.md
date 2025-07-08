@@ -146,7 +146,7 @@ View your runs at:
 
 ## 🙏 Acknowledgements
 
-- [Coconut Paper (Meta, 2023)](https://arxiv.org/abs/2412.06769)
+- [Coconut Paper (Meta, 2024)](https://arxiv.org/abs/2412.06769)
 - [A-OKVQA Dataset](https://huggingface.co/datasets/HuggingFaceM4/A-OKVQA)
 - [OpenAI CLIP](https://github.com/openai/CLIP)
 - [Hugging Face Transformers](https://huggingface.co/transformers)
