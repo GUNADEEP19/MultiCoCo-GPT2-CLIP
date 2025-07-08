@@ -111,7 +111,12 @@ def main():
 
             with autocast('cuda'):  # Mixed Precision
                 outputs = model(**batch)
-                loss = outputs.loss
+
+                # Fix: Handle DataParallel wrapping
+                if isinstance(outputs, tuple):
+                    loss = outputs[0]
+                else:
+                    loss = outputs.loss
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
