@@ -38,17 +38,6 @@ def main():
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # ─── Prepare dirs & Resume ────────────────────────────────────────
-    save_dir = os.path.join(configs.save_path, configs.name)
-    os.makedirs(save_dir, exist_ok=True)
-
-    start_epoch = configs.resume
-    # load checkpoint if resuming
-    if start_epoch > 0:
-        ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt")
-        print(f"[resume] loading checkpoint from {ckpt_path}")
-        state = torch.load(ckpt_path, map_location=device)
-    
     # ─── Load model & tokenizer ──────────────────────────────────────
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
@@ -72,10 +61,22 @@ def main():
             eos_token_id=tokenizer.eos_token_id
         )
 
+    # ─── Multi‑GPU ────────────────────────────────────────────────────
+    if torch.cuda.device_count() > 1:
+        print("Using", torch.cuda.device_count(), "GPUs")
+        model = torch.nn.DataParallel(model)
+
     model = model.to(device)
 
-    # actually load weights after wrapping
+    # ─── Resume checkpoint if requested ───────────────────────────────
+    start_epoch = configs.resume
+    save_dir = os.path.join(configs.save_path, configs.name)
+    os.makedirs(save_dir, exist_ok=True)
+
     if start_epoch > 0:
+        ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt")
+        print(f"[resume] loading checkpoint from {ckpt_path}")
+        state = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(state)
 
     # ─── Load data & collator ────────────────────────────────────────
@@ -114,7 +115,7 @@ def main():
             optimizer.zero_grad()
 
             global_step += 1
-            pbar.set_postfix(loss=round(loss.item(),4))
+            pbar.set_postfix(loss=round(loss.item(), 4))
 
             # W&B log
             wandb_run.log({
@@ -123,10 +124,11 @@ def main():
                 "train/step": global_step,
             })
 
-        # save checkpoint
+        # Save checkpoint (handle DataParallel wrapper)
         ckpt_epoch = epoch + 1
         ckpt_path = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
-        torch.save(model.state_dict(), ckpt_path)
+        sd = model.module.state_dict() if hasattr(model, "module") else model.state_dict()
+        torch.save(sd, ckpt_path)
         wandb.save(ckpt_path)
 
     wandb_run.finish()
