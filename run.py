@@ -105,7 +105,7 @@ def main():
         )
 
         model.train()
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=False)
+        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=True, dynamic_ncols=True)
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
@@ -128,7 +128,7 @@ def main():
             optimizer.zero_grad()
 
             global_step += 1
-            pbar.set_postfix(loss=round(loss.item(), 4))
+            pbar.set_postfix_str(f"loss={loss.item():.4f}")
 
             wandb_run.log({
                 "train/loss": loss.item(),
