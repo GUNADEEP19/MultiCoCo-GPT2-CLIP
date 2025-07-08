@@ -1,4 +1,4 @@
-name: coconut_aokvqa_gunadeep
+name: run_1_aokvqa_baseline
 model_id: gpt2
 
 seed: 42
@@ -8,7 +8,7 @@ project: coconut_aokvqa_guna
 # Paths
 save_path: checkpoints
 load_model_path: null
-resume: 0                 # <-- set to N to resume from checkpoint_N.pt
+resume: 0
 reset_optimizer: false
 only_eval: false
 save_only_improve: true
@@ -32,6 +32,6 @@ uniform_prob: 0.1
 # Training configs
 num_epochs: 25
 gradient_accumulation_steps: 1
-batch_size_training: 1
+batch_size_training: 3
 lr: 5e-5
 weight_decay: 0.0
