@@ -1,16 +1,20 @@
-venv
-__pycache__
-images
-# Byte-compiled / optimized / DLL files
+# ⛔ Ignore Python virtual environments and Python caches
+venv/
+__pycache__/
+
+# 📂 Ignore image directories if used
+images/
+
+# 🐍 Byte-compiled / optimized / DLL files
 *.py[cod]
 *.so
 *.pyd
 *.pyo
 
-# C extensions
+# 🧱 C extensions
 *.c
 
-# Distribution / packaging
+# 📦 Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -27,11 +31,11 @@ var/
 .installed.cfg
 *.egg
 
-# Installer logs
+# 📋 Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# ✅ Test / coverage reports
 htmlcov/
 .tox/
 .nox/
@@ -44,38 +48,42 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# 📓 Jupyter Notebook
+.ipynb_checkpoints/
 
-# PyCharm
+# 🔧 IDE-specific
 .idea/
-
-# VS Code
 .vscode/
 
-# mypy
+# 🔍 Type checker caches
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
 
-# Environment variables
+# 🔐 Env files
 .env
 .env.*
 
-# MacOS
+# 🍎 MacOS
 .DS_Store
 
-# Model checkpoints and logs
+# 🧠 Model checkpoints and logs
 checkpoints/
+checkpoints/*.pt
+checkpoints/**/*.pt
 *.pt
 *.pth
 *.ckpt
 *.log
 wandb/
 
-# YAML config backups
+# ✅ Preserve these folder structures even if they are empty
+!checkpoints/
+!checkpoints/.gitkeep
+!checkpoints/coconut_aokvqa_gunadeep/
+!checkpoints/coconut_aokvqa_gunadeep/.gitkeep
+
+# 🛠️ YAML backup files
 *.yaml~
 *.yml~
