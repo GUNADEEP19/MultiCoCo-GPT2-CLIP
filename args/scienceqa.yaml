@@ -1,0 +1,38 @@
+name: coconut_scienceqa
+model_id: gpt2
+
+seed: 42
+bf16: false
+project: coconut_mm
+
+# Paths
+save_path: checkpoints
+load_model_path: None
+resume: 0
+reset_optimizer: false
+only_eval: false
+save_only_improve: true
+
+train_path: /Users/chennupatigunadeep/Downloads/CCBD-CDSAML/COCONUT/coconut/data/Datasets/ScienceQA/scienceqa_coconut_train.json
+val_path: /Users/chennupatigunadeep/Downloads/CCBD-CDSAML/COCONUT/coconut/data/Datasets/ScienceQA/scienceqa_coconut_val.json
+
+
+debug: false
+no_thoughts: false
+cot: false
+no_cot: false
+coconut: true
+
+# Curriculum configs
+c_thought: 2
+max_latent_stage: 8
+epochs_per_stage: 2
+pad_latent_to_max: true
+uniform_prob: 0.1
+
+# Training configs
+num_epochs: 25
+gradient_accumulation_steps: 1
+batch_size_training: 1
+lr: 5e-5
+weight_decay: 0.0
