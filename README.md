@@ -1,8 +1,3 @@
-Here is a clean, structured and professional **`README.md`** file tailored for your multimodal Coconut-style reasoning project using **GPT-2 + CLIP** on **A-OKVQA**.
-
----
-
-````markdown
 # 🥥 Multimodal Latent Reasoning with GPT-2 + CLIP (Coconut-style)
 
 This project implements a Coconut-style latent reasoning framework combining **GPT-2** (for text) and **CLIP** (for vision) to solve multimodal question answering tasks like **A-OKVQA**. It supports training with **latent tokens**, curriculum learning, and stage-wise reasoning injection.
@@ -29,30 +24,30 @@ We are training a **multimodal latent reasoning model** to:
 
 ## 📁 Project Structure
 
-| File | Purpose |
-|------|---------|
-| `run.py` | Entry point to train the model. Handles config parsing, checkpointing, W&B logging, curriculum training, and mixed precision AMP. |
-| `coconut.py` | Implements the custom `Coconut` model class. Wraps GPT-2 + CLIP and handles stage-wise latent token reasoning and image embedding injection. |
-| `dataset.py` | Dataset and dataloader logic. Loads `.json` files, encodes latent tokens, and handles stage-wise reasoning logic with padding and attention. |
+| File             | Purpose                                                                 |
+|------------------|-------------------------------------------------------------------------|
+| `run.py`         | Entry point to train the model. Handles config parsing, checkpointing, W&B logging, curriculum training, and mixed precision AMP. |
+| `coconut.py`     | Implements the custom `Coconut` model class. Wraps GPT-2 + CLIP and handles stage-wise latent token reasoning and image embedding injection. |
+| `dataset.py`     | Dataset and dataloader logic. Loads `.json` files, encodes latent tokens, and handles stage-wise reasoning logic with padding and attention. |
 | `args/aokvqa.yaml` | YAML configuration for training on A-OKVQA with curriculum learning and W&B tracking. |
 
 ---
 
 ## 📦 Dependencies
 
-Make sure to install the following:
+Install the required libraries:
 
 ```bash
 pip install torch torchvision transformers datasets wandb
-````
+```
 
-Or use the environment available on **Kaggle / Colab / your own virtualenv**.
+Or use Kaggle / Colab with GPU runtime.
 
 ---
 
 ## 📚 Dataset Format (A-OKVQA)
 
-Each sample in `aokvqa_train.json` follows this schema:
+Each example in `aokvqa_train.json` should look like:
 
 ```json
 {
@@ -63,27 +58,20 @@ Each sample in `aokvqa_train.json` follows this schema:
 }
 ```
 
-You should provide both:
+You need both:
 
-* `aokvqa_train.json`
-* `aokvqa_validation.json`
+- `aokvqa_train.json`
+- `aokvqa_validation.json`
 
 ---
 
 ## 🏁 Training Instructions
 
-To start training:
+To train the model, run:
 
 ```bash
 python run.py args/aokvqa.yaml
 ```
-
-This supports:
-
-* Resuming from checkpoints
-* Logging to W\&B
-* Mixed precision (fp16) with AMP
-* Curriculum learning via `epochs_per_stage`
 
 ---
 
@@ -93,6 +81,7 @@ This supports:
 name: coconut_aokvqa_gunadeep
 model_id: gpt2
 project: coconut_aokvqa_guna
+name: run_1_aokvqa_baseline
 resume: 0
 train_path: /path/to/aokvqa_train.json
 val_path: /path/to/aokvqa_validation.json
@@ -106,67 +95,65 @@ lr: 5e-5
 save_path: checkpoints
 ```
 
-> To resume from a checkpoint (e.g., `checkpoint_10.pt`), just set:
->
-> ```yaml
-> resume: 10
-> ```
-
----
-
-## 🧪 Evaluation & Inference
-
-Evaluation loop is not included yet, but can be integrated similarly to training using `.generate()` in `coconut.py`.
-
----
-
-## 📈 Logging with Weights & Biases
-
-Track training progress via [W\&B dashboard](https://wandb.ai/gunadeep2005-pes-university/coconut_aokvqa_guna).
-
-```bash
-wandb login
+✅ To resume from checkpoint_10.pt:
+```yaml
+resume: 10
 ```
 
 ---
 
 ## 🧊 Checkpoints & Resuming
 
-All model checkpoints are saved under:
+Model checkpoints are saved at:
 
 ```
 checkpoints/coconut_aokvqa_gunadeep/checkpoint_{epoch}.pt
 ```
 
-To resume training:
+Resume training from a checkpoint by setting `resume:` in your YAML.
+
+---
+
+## 🧪 Evaluation & Inference
+
+Evaluation loop is not included yet.
+
+For inference, you can use the `generate()` method in `coconut.py`.
+
+---
+
+## 📈 Logging with Weights & Biases
+
+Make sure you're logged in to W&B:
 
 ```bash
-# Set this in your yaml:
-resume: 10
+wandb login
 ```
+
+View your runs at:  
+[https://wandb.ai/gunadeep2005-pes-university/coconut_aokvqa_guna](https://wandb.ai/gunadeep2005-pes-university/coconut_aokvqa_guna)
 
 ---
 
 ## 💡 Future Enhancements
 
-* Evaluation & accuracy metrics
-* Support for other vision models (e.g. DINOv2)
-* Integration with Hugging Face `Trainer`
-* Inference demo notebook
+- Add evaluation metrics
+- Add support for other vision models (e.g., DINOv2, BLIP)
+- HuggingFace `Trainer` integration
+- Inference notebook for demo
 
 ---
 
 ## 🙏 Acknowledgements
 
-* [Coconut Paper (Meta, 2023)](https://arxiv.org/abs/2312.06769)
-* [A-OKVQA Dataset](https://huggingface.co/datasets/HuggingFaceM4/A-OKVQA)
-* OpenAI's [CLIP](https://github.com/openai/CLIP)
-* Hugging Face Transformers
+- [Coconut Paper (Meta, 2023)](https://arxiv.org/abs/2312.06769)
+- [A-OKVQA Dataset](https://huggingface.co/datasets/HuggingFaceM4/A-OKVQA)
+- [OpenAI CLIP](https://github.com/openai/CLIP)
+- [Hugging Face Transformers](https://huggingface.co/transformers)
 
 ---
 
 ## 📝 License
 
-MIT License. Copyright © 2025
-
----
+MIT License.  
+© 2025 Gunadeep Chennupati – PES University
