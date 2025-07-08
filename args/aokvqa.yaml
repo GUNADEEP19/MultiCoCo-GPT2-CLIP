@@ -13,8 +13,8 @@ reset_optimizer: false
 only_eval: false
 save_only_improve: true
 
-train_path: /Users/chennupatigunadeep/Downloads/CCBD-CDSAML/COCONUT/coconut/data/Datasets/A-OKVQA/aokvqa_train.json
-val_path:   /Users/chennupatigunadeep/Downloads/CCBD-CDSAML/COCONUT/coconut/data/Datasets/A-OKVQA/aokvqa_validation.json
+train_path: /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_train.json
+val_path:   /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
 
 debug: false
 no_thoughts: false

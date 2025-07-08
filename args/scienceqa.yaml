@@ -13,8 +13,8 @@ reset_optimizer: false
 only_eval: false
 save_only_improve: true
 
-train_path: /Users/chennupatigunadeep/Downloads/CCBD-CDSAML/COCONUT/coconut/data/Datasets/ScienceQA/scienceqa_coconut_train.json
-val_path: /Users/chennupatigunadeep/Downloads/CCBD-CDSAML/COCONUT/coconut/data/Datasets/ScienceQA/scienceqa_coconut_val.json
+train_path: /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/ScienceQA/scienceqa_coconut_train.json
+val_path: /kaggle/working/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/ScienceQA/scienceqa_coconut_val.json
 
 
 debug: false
