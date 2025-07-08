@@ -4,7 +4,6 @@ model_id: gpt2
 seed: 42
 bf16: false
 project: coconut_aokvqa_guna
-name: run_1_aokvqa_baseline 
 
 # Paths
 save_path: checkpoints
