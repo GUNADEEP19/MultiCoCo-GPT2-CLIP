@@ -12,11 +12,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-from torch.amp import autocast, GradScaler  # ← keep this, no device_type arg
+from torch.amp import autocast, GradScaler
 
 
 def decode_preds(pred_ids, tokenizer):
-    return tokenizer.decode(pred_ids[0], skip_special_tokens=True)
+    # If batched, take first item
+    if pred_ids.ndim == 2:
+        pred_ids = pred_ids[0]
+    pred_ids = pred_ids.tolist()
+    # Remove masked values
+    pred_ids = [id for id in pred_ids if id != -100]
+    return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 
 def main():
@@ -24,7 +30,7 @@ def main():
     parser.add_argument("config_file", help="Path to YAML config")
     args = parser.parse_args()
 
-    # Load config
+    # ─── Load config ─────────────────────────────────────────────────
     with open(args.config_file) as f:
         cfg = yaml.safe_load(f)
     configs = Config(cfg)
@@ -32,7 +38,7 @@ def main():
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
 
-    # W&B
+    # ─── W&B Init ────────────────────────────────────────────────────
     wandb.login()
     wandb_run = wandb.init(
         project=configs.project,
@@ -41,22 +47,22 @@ def main():
         reinit=True
     )
 
-    # Seed and device
+    # ─── Set seed & device ───────────────────────────────────────────
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Checkpoint dir
+    # ─── Save path & resume ──────────────────────────────────────────
     save_dir = os.path.join(configs.save_path, configs.name)
     os.makedirs(save_dir, exist_ok=True)
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
-    # Load model/tokenizer
+    # ─── Load model & tokenizer ──────────────────────────────────────
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Special tokens
+    # Special Tokens
     special_tokens = ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     tokenizer.add_tokens(special_tokens)
     model.resize_token_embeddings(len(tokenizer))
@@ -65,6 +71,7 @@ def main():
     START_ID = tokenizer.convert_tokens_to_ids("<|start-latent|>")
     END_ID = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
+    # Wrap in Coconut
     if configs.coconut:
         model = Coconut(
             base_causallm=model,
@@ -84,14 +91,14 @@ def main():
         print(f"[Resume] Loading checkpoint from {ckpt_path}")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
-    # Load datasets
+    # ─── Dataset & Collator ──────────────────────────────────────────
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
-    # Optimizer + AMP (💡 No device_type param here)
+    # ─── Optimizer & AMP ─────────────────────────────────────────────
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler = GradScaler()  # ← old compatible style
+    scaler = GradScaler('cuda')
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
@@ -104,28 +111,32 @@ def main():
 
         model.train()
         epoch_loss = 0
+        optimizer.zero_grad()
         pbar = tqdm(loader, desc=f"Epoch {epoch + 1}", leave=False)
 
-        for batch in pbar:
+        for step, batch in enumerate(pbar):
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
-            with autocast():
+            with autocast(device_type="cuda"):
                 outputs = model(**batch)
                 loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
                 if loss.dim() != 0:
                     loss = loss.mean()
+                loss = loss / configs.gradient_accumulation_steps
 
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
-
+            epoch_loss += loss.item() * configs.gradient_accumulation_steps
             global_step += 1
-            epoch_loss += loss.item()
-            pbar.set_postfix(loss=round(loss.item(), 4))
+
+            if (step + 1) % configs.gradient_accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+            pbar.set_postfix(loss=round(loss.item() * configs.gradient_accumulation_steps, 4))
 
             wandb_run.log({
-                "train/loss": loss.item(),
+                "train/loss": loss.item() * configs.gradient_accumulation_steps,
                 "train/epoch": epoch + 1,
                 "train/step": global_step,
             })
@@ -133,7 +144,7 @@ def main():
         avg_train_loss = epoch_loss / len(loader)
         print(f"📉 Avg Train Loss: {avg_train_loss:.4f}")
 
-        # Validation
+        # ─── Evaluation ──────────────────────────────────────────────
         model.eval()
         val_ds = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
         val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
@@ -158,19 +169,16 @@ def main():
                 total += labels.numel()
 
                 if i < 3:
-                    try:
-                        print(f"\nSample {i+1}")
-                        print("Q:", decode_preds(batch["input_ids"], tokenizer))
-                        print("Pred:", decode_preds(preds, tokenizer))
-                        print("Answer:", decode_preds(labels, tokenizer))
-                    except Exception as e:
-                        print(f"(⚠️ Decode error: {e})")
+                    print(f"\nSample {i+1}")
+                    print("Q:", decode_preds(batch["input_ids"], tokenizer))
+                    print("Pred:", decode_preds(preds, tokenizer))
+                    print("Answer:", decode_preds(labels, tokenizer))
 
         val_loss_avg = val_loss_total / len(val_loader)
         val_accuracy = 100.0 * correct / total
         print(f"\n✅ Val Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%")
 
-        # Log & save
+        # ─── Log & Save ───────────────────────────────────────────────
         wandb_run.log({
             "train/avg_loss": avg_train_loss,
             "val/loss": val_loss_avg,
