@@ -3,21 +3,15 @@ import yaml
 import torch
 import wandb
 import argparse
-import warnings
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from torch.amp import autocast, GradScaler  # AMP for mixed precision
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-
-# ─── Suppress Warnings ──────────────────────────────────────────────
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-warnings.filterwarnings("ignore", message=".*past_key_values.*")
-warnings.filterwarnings("ignore", message=".*Was asked to gather along dimension 0.*")
+from torch.amp import autocast, GradScaler  # AMP for mixed precision
 
 
 def main():
@@ -112,19 +106,20 @@ def main():
         )
 
         model.train()
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=True, dynamic_ncols=True)
+        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=False)
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
             with autocast('cuda'):
                 outputs = model(**batch)
 
-                # Handle scalar for both DataParallel and normal
+                # ⚠️ Fix for DataParallel (tuple output)
                 if isinstance(outputs, tuple):
                     loss = outputs[0]
                 else:
                     loss = outputs.loss
 
+                # ⚠️ Ensure scalar
                 if loss.dim() != 0:
                     loss = loss.mean()
 
@@ -142,7 +137,47 @@ def main():
                 "train/step": global_step,
             })
 
-        # Save checkpoint
+        # ─── Evaluation After Epoch ───────────────────────────────────────────
+        model.eval()
+        val_ds = get_cot_latent_dataset(
+            val_data, stage, configs, START_ID, LATENT_ID, END_ID
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=1,
+            shuffle=False,
+            collate_fn=collator,
+        )
+
+        val_loss_total = 0
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validating", leave=False):
+                batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
+                outputs = model(**batch)
+                loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
+                if loss.dim() != 0:
+                    loss = loss.mean()
+                val_loss_total += loss.item()
+
+                preds = outputs.logits.argmax(dim=-1)
+                labels = batch["labels"]
+                correct += (preds == labels).sum().item()
+                total += labels.numel()
+
+        val_loss_avg = val_loss_total / len(val_loader)
+        val_accuracy = 100.0 * correct / total
+
+        print(f"\n✅ Validation Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%\n")
+        wandb_run.log({
+            "val/loss": val_loss_avg,
+            "val/accuracy": val_accuracy,
+            "val/epoch": epoch + 1,
+        })
+
+        # ─── Save checkpoint ───────────────────────────────────────────────
         ckpt_epoch = epoch + 1
         ckpt_path = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
         torch.save(model.state_dict(), ckpt_path)
