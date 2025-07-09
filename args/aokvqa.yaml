@@ -14,8 +14,8 @@ reset_optimizer: false
 only_eval: false
 save_only_improve: true
 
-train_path: /content/drive/MyDrive/aokvqa_train.json
-val_path: /content/drive/MyDrive/aokvqa_validation.json
+train_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_train.json
+val_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
 
 debug: false
 no_thoughts: false
