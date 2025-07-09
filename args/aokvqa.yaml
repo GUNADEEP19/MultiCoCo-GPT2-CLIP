@@ -1,38 +1,39 @@
-name: coconut_aokvqa_gunadeep
+name: run_1_aokvqa_baseline
 model_id: gpt2
 
 seed: 42
 bf16: false  # Not using bf16; using fp16 (via AMP)
 project: coconut_aokvqa_guna
-name: run_1_aokvqa_baseline
 
-# Paths (update to correct location in Kaggle)
-save_path: /content/drive/MyDrive/checkpoints
+# ✅ Save checkpoints to Google Drive (persistent)
+save_path: /content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gunadeep
 load_model_path: null
-resume: 0  # Set to N if you want to resume from checkpoint_N.pt
+resume: 0  # Change this to N if resuming from checkpoint_N.pt
 reset_optimizer: false
 only_eval: false
 save_only_improve: true
 
+# ✅ Dataset paths (adjust if needed)
 train_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_train.json
 val_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
 
+# ⛓️ Reasoning setup
 debug: false
 no_thoughts: false
 cot: false
 no_cot: false
 coconut: true
 
-# Curriculum configs
+# 🧠 Curriculum configs
 c_thought: 2
 max_latent_stage: 8
 epochs_per_stage: 2
 pad_latent_to_max: true
 uniform_prob: 0.1
 
-# Training configs
+# 🏋️ Training configs
 num_epochs: 25
 gradient_accumulation_steps: 1
-batch_size_training: 4
+batch_size_training: 2  # ✅ For Colab Free Tier (adjust to 1 if out of memory)
 lr: 5e-5
 weight_decay: 0.0
