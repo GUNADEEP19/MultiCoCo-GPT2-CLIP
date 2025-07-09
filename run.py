@@ -111,7 +111,7 @@ def main():
         for step, batch in enumerate(pbar):
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
-            with autocast():
+            with autocast(device_type="cuda"):
                 outputs = model(**batch)
                 loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
                 if loss.dim() != 0:
