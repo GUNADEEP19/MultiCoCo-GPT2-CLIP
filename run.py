@@ -90,11 +90,13 @@ def main():
         lr=configs.lr,
         weight_decay=configs.weight_decay
     )
-    scaler = GradScaler('cuda')  # for mixed precision
+    scaler = GradScaler('cuda')
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
+        print(f"\n🎯 Epoch {epoch + 1}/{configs.num_epochs} | Curriculum Stage: {stage}")
+
         train_ds = get_cot_latent_dataset(
             train_data, stage, configs, START_ID, LATENT_ID, END_ID
         )
@@ -106,20 +108,14 @@ def main():
         )
 
         model.train()
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}/{configs.num_epochs}", leave=False)
+        epoch_loss = 0
+        pbar = tqdm(loader, desc=f"Epoch {epoch + 1}", leave=False)
         for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
             with autocast('cuda'):
                 outputs = model(**batch)
-
-                # ⚠️ Fix for DataParallel (tuple output)
-                if isinstance(outputs, tuple):
-                    loss = outputs[0]
-                else:
-                    loss = outputs.loss
-
-                # ⚠️ Ensure scalar
+                loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
                 if loss.dim() != 0:
                     loss = loss.mean()
 
@@ -129,6 +125,7 @@ def main():
             optimizer.zero_grad()
 
             global_step += 1
+            epoch_loss += loss.item()
             pbar.set_postfix(loss=round(loss.item(), 4))
 
             wandb_run.log({
@@ -137,7 +134,10 @@ def main():
                 "train/step": global_step,
             })
 
-        # ─── Evaluation After Epoch ───────────────────────────────────────────
+        avg_train_loss = epoch_loss / len(loader)
+        print(f"📉 Average Training Loss: {avg_train_loss:.4f}")
+
+        # ─── Evaluation After Epoch ───────────────────────────────────
         model.eval()
         val_ds = get_cot_latent_dataset(
             val_data, stage, configs, START_ID, LATENT_ID, END_ID
@@ -169,15 +169,17 @@ def main():
 
         val_loss_avg = val_loss_total / len(val_loader)
         val_accuracy = 100.0 * correct / total
+        print(f"✅ Validation Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%")
 
-        print(f"\n✅ Validation Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%\n")
+        # ─── Log & Save ────────────────────────────────────────────────
         wandb_run.log({
+            "train/avg_loss": avg_train_loss,
             "val/loss": val_loss_avg,
             "val/accuracy": val_accuracy,
             "val/epoch": epoch + 1,
+            "curriculum/stage": stage
         })
 
-        # ─── Save checkpoint ───────────────────────────────────────────────
         ckpt_epoch = epoch + 1
         ckpt_path = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
         torch.save(model.state_dict(), ckpt_path)
