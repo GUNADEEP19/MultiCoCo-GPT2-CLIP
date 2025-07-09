@@ -1,6 +1,6 @@
 import os
-import yaml
 import time
+import yaml
 import torch
 import wandb
 import argparse
@@ -8,15 +8,20 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from torch.amp import autocast, GradScaler
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-from torch.amp import autocast, GradScaler
 
 
 def decode_preds(pred_ids, tokenizer):
-    return tokenizer.decode(pred_ids[0], skip_special_tokens=True)
+    """Decode while ignoring -100 values"""
+    if pred_ids.ndim == 2:
+        pred_ids = pred_ids[0]
+    pred_ids = pred_ids.tolist()
+    pred_ids = [i for i in pred_ids if i != -100]
+    return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 
 def main():
@@ -24,7 +29,7 @@ def main():
     parser.add_argument("config_file", help="Path to YAML config")
     args = parser.parse_args()
 
-    # ─── Load config ─────────────────────────────────────────────────
+    # ─── Load Config ─────────────────────────────
     with open(args.config_file) as f:
         cfg = yaml.safe_load(f)
     configs = Config(cfg)
@@ -32,7 +37,7 @@ def main():
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
 
-    # ─── W&B Init ────────────────────────────────────────────────────
+    # ─── W&B Logging ─────────────────────────────
     wandb.login()
     wandb_run = wandb.init(
         project=configs.project,
@@ -41,22 +46,20 @@ def main():
         reinit=True
     )
 
-    # ─── Set seed & device ───────────────────────────────────────────
+    # ─── Seed, Device, Checkpoint Setup ─────────
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # ─── Save path & resume ──────────────────────────────────────────
     save_dir = os.path.join(configs.save_path, configs.name)
     os.makedirs(save_dir, exist_ok=True)
+
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
-    # ─── Load model & tokenizer ──────────────────────────────────────
+    # ─── Load Model & Tokenizer ─────────────────
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Special Tokens
     special_tokens = ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     tokenizer.add_tokens(special_tokens)
     model.resize_token_embeddings(len(tokenizer))
@@ -65,7 +68,6 @@ def main():
     START_ID = tokenizer.convert_tokens_to_ids("<|start-latent|>")
     END_ID = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
-    # Wrap in Coconut
     if configs.coconut:
         model = Coconut(
             base_causallm=model,
@@ -76,7 +78,6 @@ def main():
         )
 
     model = model.to(device)
-
     if torch.cuda.device_count() > 1:
         print(f"✅ Using {torch.cuda.device_count()} GPUs")
         model = torch.nn.DataParallel(model)
@@ -85,14 +86,13 @@ def main():
         print(f"[Resume] Loading checkpoint from {ckpt_path}")
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
-    # ─── Dataset & Collator ──────────────────────────────────────────
+    # ─── Load Dataset ───────────────────────────
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
-    # ─── Optimizer & AMP ─────────────────────────────────────────────
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler = GradScaler('cuda')
+    scaler = GradScaler(device_type="cuda")
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
@@ -101,14 +101,12 @@ def main():
         epoch_start = time.time()
 
         train_ds = get_cot_latent_dataset(train_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        loader = DataLoader(train_ds, batch_size=configs.batch_size_training, shuffle=True, collate_fn=collator)
+        train_loader = DataLoader(train_ds, batch_size=configs.batch_size_training, shuffle=True, collate_fn=collator)
 
         model.train()
         epoch_loss = 0
-        optimizer.zero_grad()
-        pbar = tqdm(loader, desc=f"Epoch {epoch + 1}", leave=False)
-
-        for step, batch in enumerate(pbar):
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}", leave=False)
+        for batch in pbar:
             batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
 
             with autocast(device_type="cuda"):
@@ -116,29 +114,26 @@ def main():
                 loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
                 if loss.dim() != 0:
                     loss = loss.mean()
-                loss = loss / configs.gradient_accumulation_steps
 
             scaler.scale(loss).backward()
-            epoch_loss += loss.item() * configs.gradient_accumulation_steps
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+
             global_step += 1
-
-            if (step + 1) % configs.gradient_accumulation_steps == 0:
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-
-            pbar.set_postfix(loss=round(loss.item() * configs.gradient_accumulation_steps, 4))
+            epoch_loss += loss.item()
+            pbar.set_postfix(loss=round(loss.item(), 4))
 
             wandb_run.log({
-                "train/loss": loss.item() * configs.gradient_accumulation_steps,
+                "train/loss": loss.item(),
                 "train/epoch": epoch + 1,
                 "train/step": global_step,
             })
 
-        avg_train_loss = epoch_loss / len(loader)
+        avg_train_loss = epoch_loss / len(train_loader)
         print(f"📉 Avg Train Loss: {avg_train_loss:.4f}")
 
-        # ─── Evaluation ──────────────────────────────────────────────
+        # ─── Validation ───────────────────────────
         model.eval()
         val_ds = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
         val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
@@ -163,7 +158,7 @@ def main():
                 total += labels.numel()
 
                 if i < 3:
-                    print(f"\nSample {i+1}")
+                    print(f"\nSample {i + 1}")
                     print("Q:", decode_preds(batch["input_ids"], tokenizer))
                     print("Pred:", decode_preds(preds, tokenizer))
                     print("Answer:", decode_preds(labels, tokenizer))
@@ -172,7 +167,6 @@ def main():
         val_accuracy = 100.0 * correct / total
         print(f"\n✅ Val Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%")
 
-        # ─── Log & Save ───────────────────────────────────────────────
         wandb_run.log({
             "train/avg_loss": avg_train_loss,
             "val/loss": val_loss_avg,
@@ -181,13 +175,13 @@ def main():
             "curriculum/stage": stage
         })
 
+        # ─── Save Checkpoint ───────────────────────
         ckpt_epoch = epoch + 1
         ckpt_path = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
         torch.save(model.state_dict(), ckpt_path)
         wandb.save(ckpt_path)
 
-        elapsed = time.time() - epoch_start
-        print(f"⏱️ Time Taken: {elapsed/60:.2f} mins")
+        print(f"⏱️ Time Taken: {(time.time() - epoch_start)/60:.2f} mins")
 
     wandb_run.finish()
 
