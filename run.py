@@ -14,14 +14,12 @@ from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
 from torch.amp import autocast, GradScaler
 
-
 def decode_preds(pred_ids, tokenizer):
     if pred_ids.ndim == 2:
         pred_ids = pred_ids[0]
     pred_ids = pred_ids.tolist()
     pred_ids = [id for id in pred_ids if id != -100]
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -66,20 +64,19 @@ def main():
     model.resize_token_embeddings(len(tokenizer))
 
     LATENT_ID = tokenizer.convert_tokens_to_ids("<|latent|>")
-    START_ID = tokenizer.convert_tokens_to_ids("<|start-latent|>")
-    END_ID = tokenizer.convert_tokens_to_ids("<|end-latent|>")
+    START_ID  = tokenizer.convert_tokens_to_ids("<|start-latent|>")
+    END_ID    = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
     if configs.coconut:
         model = Coconut(
-            base_causallm=model,
-            latent_token_id=LATENT_ID,
-            start_latent_id=START_ID,
-            end_latent_id=END_ID,
-            eos_token_id=tokenizer.eos_token_id
+            base_causallm   = model,
+            latent_token_id = LATENT_ID,
+            start_latent_id = START_ID,
+            end_latent_id   = END_ID,
+            eos_token_id    = tokenizer.eos_token_id
         )
 
     model = model.to(device)
-
     if torch.cuda.device_count() > 1:
         print(f"✅ Using {torch.cuda.device_count()} GPUs")
         model = torch.nn.DataParallel(model)
@@ -90,113 +87,117 @@ def main():
 
     # ─── Dataset & Collator ──────────────────────────────────────────
     train_data = get_dataset(configs.train_path)
-    val_data = get_dataset(configs.val_path)
-    collator = MyCollator(tokenizer, latent_id=LATENT_ID)
+    val_data   = get_dataset(configs.val_path)
+    collator   = MyCollator(tokenizer, latent_id=LATENT_ID)
 
     # ─── Optimizer & AMP ─────────────────────────────────────────────
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler = GradScaler('cuda')
+    scaler    = GradScaler('cuda')
+
+    best_val_loss = float("inf")
 
     global_step = 0
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
-        print(f"\n🎯 Epoch {epoch + 1}/{configs.num_epochs} | Curriculum Stage: {stage}")
+        print(f"\n🎯 Epoch {epoch+1}/{configs.num_epochs} | Curriculum Stage: {stage}")
         epoch_start = time.time()
 
+        # ─── Training ────────────────────────────────────────────────
         train_ds = get_cot_latent_dataset(train_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        loader = DataLoader(train_ds, batch_size=configs.batch_size_training, shuffle=True, collate_fn=collator)
+        loader   = DataLoader(train_ds, batch_size=configs.batch_size_training,
+                              shuffle=True, collate_fn=collator)
 
         model.train()
-        epoch_loss = 0
+        epoch_loss = 0.0
         optimizer.zero_grad()
-        pbar = tqdm(loader, desc=f"Epoch {epoch + 1}", leave=False)
+        pbar = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
 
         for step, batch in enumerate(pbar):
-            batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
+            batch = {k: v.to(device) for k,v in batch.items() if k!="idx"}
 
             with autocast(device_type="cuda"):
                 outputs = model(**batch)
                 loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
-                if loss.dim() != 0:
-                    loss = loss.mean()
-                loss = loss / configs.gradient_accumulation_steps
+                loss = loss.mean() / configs.gradient_accumulation_steps
 
             scaler.scale(loss).backward()
-            epoch_loss += loss.item() * configs.gradient_accumulation_steps
+            epoch_loss += (loss.item() * configs.gradient_accumulation_steps)
             global_step += 1
 
-            if (step + 1) % configs.gradient_accumulation_steps == 0:
+            if (step+1) % configs.gradient_accumulation_steps == 0:
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
 
-            pbar.set_postfix(loss=round(loss.item() * configs.gradient_accumulation_steps, 4))
-
+            pbar.set_postfix(loss=round(loss.item()*configs.gradient_accumulation_steps,4))
             wandb_run.log({
-                "train/loss": loss.item() * configs.gradient_accumulation_steps,
-                "train/epoch": epoch + 1,
-                "train/step": global_step,
+                "train/loss":  loss.item()*configs.gradient_accumulation_steps,
+                "train/epoch": epoch+1,
+                "train/step":  global_step
             })
 
         avg_train_loss = epoch_loss / len(loader)
         print(f"📉 Avg Train Loss: {avg_train_loss:.4f}")
 
-        # ─── Evaluation ──────────────────────────────────────────────
+        # ─── Validation ──────────────────────────────────────────────
         model.eval()
-        val_ds = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
+        val_ds     = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
         val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
 
-        val_loss_total = 0
+        val_loss_total = 0.0
         correct = 0
-        total = 0
+        total   = 0
 
         print("🔍 Sample Predictions:")
         with torch.no_grad():
             for i, batch in enumerate(tqdm(val_loader, desc="Validating", leave=False)):
-                batch = {k: v.to(device) for k, v in batch.items() if k != "idx"}
+                batch   = {k: v.to(device) for k,v in batch.items() if k!="idx"}
                 outputs = model(**batch)
-                loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
-                if loss.dim() != 0:
-                    loss = loss.mean()
-                val_loss_total += loss.item()
+                loss    = outputs[0] if isinstance(outputs, tuple) else outputs.loss
+                val_loss_total += loss.mean().item()
 
-                preds = outputs.logits.argmax(dim=-1)
+                preds  = outputs.logits.argmax(dim=-1)
                 labels = batch["labels"]
+                mask   = labels != -100
+                correct += ((preds==labels)&mask).sum().item()
+                total   += mask.sum().item()
 
-                # ✅ Corrected accuracy calculation
-                mask = labels != -100
-                correct += ((preds == labels) & mask).sum().item()
-                total += mask.sum().item()
-
-                if i < 3:
+                if i<3:
                     print(f"\nSample {i+1}")
-                    print("Q:", decode_preds(batch["input_ids"], tokenizer))
+                    print("Q:   ", decode_preds(batch["input_ids"], tokenizer))
                     print("Pred:", decode_preds(preds, tokenizer))
-                    print("Answer:", decode_preds(labels, tokenizer))
+                    print("Ans: ", decode_preds(labels, tokenizer))
 
-        val_loss_avg = val_loss_total / len(val_loader)
-        val_accuracy = 100.0 * correct / total if total > 0 else 0.0
+        val_loss_avg  = val_loss_total / len(val_loader)
+        val_accuracy  = 100.0 * correct/total if total>0 else 0.0
         print(f"\n✅ Val Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%")
 
-        # ─── Log & Save ───────────────────────────────────────────────
         wandb_run.log({
             "train/avg_loss": avg_train_loss,
-            "val/loss": val_loss_avg,
-            "val/accuracy": val_accuracy,
-            "val/epoch": epoch + 1,
-            "curriculum/stage": stage
+            "val/loss":       val_loss_avg,
+            "val/accuracy":   val_accuracy,
+            "val/epoch":      epoch+1,
+            "curriculum":     stage
         })
 
-        ckpt_epoch = epoch + 1
-        ckpt_path = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
+        # ─── Checkpoint Saving ───────────────────────────────────────
+        # 1) epoch checkpoint
+        ckpt_epoch = epoch+1
+        ckpt_path  = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
         torch.save(model.state_dict(), ckpt_path)
         wandb.save(ckpt_path)
 
+        # 2) best.pt if improved
+        if val_loss_avg < best_val_loss:
+            best_val_loss = val_loss_avg
+            best_path = os.path.join(save_dir, "best.pt")
+            torch.save(model.state_dict(), best_path)
+            print(f"🔥 New best model saved: {best_path}")
+
         elapsed = time.time() - epoch_start
-        print(f"⏱️ Time Taken: {elapsed/60:.2f} mins")
+        print(f"⏱️ Time taken: {elapsed/60:.2f} mins")
 
     wandb_run.finish()
-
 
 if __name__ == "__main__":
     main()
