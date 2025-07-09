@@ -16,11 +16,9 @@ from torch.amp import autocast, GradScaler
 
 
 def decode_preds(pred_ids, tokenizer):
-    # If batched, take first item
     if pred_ids.ndim == 2:
         pred_ids = pred_ids[0]
     pred_ids = pred_ids.tolist()
-    # Remove masked values
     pred_ids = [id for id in pred_ids if id != -100]
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
@@ -71,7 +69,6 @@ def main():
     START_ID = tokenizer.convert_tokens_to_ids("<|start-latent|>")
     END_ID = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
-    # Wrap in Coconut
     if configs.coconut:
         model = Coconut(
             base_causallm=model,
@@ -165,8 +162,11 @@ def main():
 
                 preds = outputs.logits.argmax(dim=-1)
                 labels = batch["labels"]
-                correct += (preds == labels).sum().item()
-                total += labels.numel()
+
+                # ✅ Corrected accuracy calculation
+                mask = labels != -100
+                correct += ((preds == labels) & mask).sum().item()
+                total += mask.sum().item()
 
                 if i < 3:
                     print(f"\nSample {i+1}")
@@ -175,7 +175,7 @@ def main():
                     print("Answer:", decode_preds(labels, tokenizer))
 
         val_loss_avg = val_loss_total / len(val_loader)
-        val_accuracy = 100.0 * correct / total
+        val_accuracy = 100.0 * correct / total if total > 0 else 0.0
         print(f"\n✅ Val Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%")
 
         # ─── Log & Save ───────────────────────────────────────────────
