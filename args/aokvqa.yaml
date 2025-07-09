@@ -1,6 +1,5 @@
 name: run_1_aokvqa_baseline
 model_id: gpt2
-
 seed: 42
 bf16: false  # Not using bf16; using fp16 (via AMP)
 project: coconut_aokvqa_guna
@@ -8,7 +7,7 @@ project: coconut_aokvqa_guna
 # ✅ Save checkpoints to Google Drive (persistent)
 save_path: /content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gunadeep
 load_model_path: null
-resume: 0  # Change this to N if resuming from checkpoint_N.pt
+resume: 0
 reset_optimizer: false
 only_eval: false
 save_only_improve: true
@@ -31,9 +30,9 @@ epochs_per_stage: 2
 pad_latent_to_max: true
 uniform_prob: 0.1
 
-# 🏋️ Training configs
+# 🏋️ Training configs for Colab Free Tier
 num_epochs: 25
-gradient_accumulation_steps: 1
-batch_size_training: 2  # ✅ For Colab Free Tier (adjust to 1 if out of memory)
+batch_size_training: 1         # ⬅️ CHANGED from 2 → 1 (reduces GPU memory usage)
+gradient_accumulation_steps: 2 # ⬅️ ADDED to simulate batch size of 2
 lr: 5e-5
 weight_decay: 0.0
