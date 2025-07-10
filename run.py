@@ -28,20 +28,23 @@ def inject_latents(batch, Z, model, latent_token_id):
     input_ids = batch["input_ids"]
     B, L = input_ids.shape
     device = input_ids.device
-    token_embeddings = model.module if hasattr(model, "module") else model
-    token_embeddings = token_embeddings.get_input_embeddings()(input_ids.to(device))
+
+    # Get embeddings from base model
+    token_embeddings = model.module.base_causallm.get_input_embeddings()(input_ids.to(device)) \
+                        if hasattr(model, "module") else model.base_causallm.get_input_embeddings()(input_ids.to(device))
 
     latent_mask = (input_ids == latent_token_id)  # (B, L)
     B, L, H = token_embeddings.shape
 
+    # Flatten and insert Z
     flat_mask = latent_mask.view(B * L)
     flat_embeds = token_embeddings.view(B * L, H)
-
     actual_latent_count = latent_mask.sum(dim=1)[0].item()
-    Z = Z[:, :actual_latent_count, :]  # ensure it matches
-
+    Z = Z[:, :actual_latent_count, :]
     flat_embeds[flat_mask] = Z.reshape(-1, H)
+
     return flat_embeds.view(B, L, H)
+
 
 def main():
     parser = argparse.ArgumentParser()
