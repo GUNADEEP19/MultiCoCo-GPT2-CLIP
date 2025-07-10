@@ -15,7 +15,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-from torch.amp import autocast, GradScaler
+from torch.cuda.amp import autocast, GradScaler
+
 
 def decode_preds(pred_ids, tokenizer):
     if pred_ids.ndim == 2:
