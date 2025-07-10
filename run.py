@@ -1,6 +1,8 @@
 import os
 import yaml
 import time
+import json
+import csv
 import torch
 import wandb
 import argparse
@@ -53,6 +55,13 @@ def main():
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
+    # Prepare metrics CSV
+    metrics_csv = os.path.join(save_dir, "metrics.csv")
+    if not os.path.exists(metrics_csv):
+        with open(metrics_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["epoch", "stage", "val_loss", "val_accuracy", "avg_tokens"])
+
     # ─── Load model & tokenizer ──────────────────────────────────────
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
@@ -95,8 +104,8 @@ def main():
     scaler    = GradScaler('cuda')
 
     best_val_loss = float("inf")
-
     global_step = 0
+
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
         print(f"\n🎯 Epoch {epoch+1}/{configs.num_epochs} | Curriculum Stage: {stage}")
@@ -147,6 +156,7 @@ def main():
         val_loss_total = 0.0
         correct = 0
         total   = 0
+        total_tokens_generated = 0  # NEW: accumulate total tokens
 
         print("🔍 Sample Predictions:")
         with torch.no_grad():
@@ -162,6 +172,10 @@ def main():
                 correct += ((preds==labels)&mask).sum().item()
                 total   += mask.sum().item()
 
+                # ✅ Count generated tokens (exclude padding & -100)
+                token_mask = (preds != tokenizer.pad_token_id) & (labels != -100)
+                total_tokens_generated += token_mask.sum().item()
+
                 if i<3:
                     print(f"\nSample {i+1}")
                     print("Q:   ", decode_preds(batch["input_ids"], tokenizer))
@@ -170,29 +184,57 @@ def main():
 
         val_loss_avg  = val_loss_total / len(val_loader)
         val_accuracy  = 100.0 * correct/total if total>0 else 0.0
-        print(f"\n✅ Val Loss: {val_loss_avg:.4f} | Accuracy: {val_accuracy:.2f}%")
+        avg_tokens_generated = total_tokens_generated / len(val_loader)  # NEW: average per example
 
+        print(f"\n✅ Val Loss: {val_loss_avg:.4f} | "
+              f"Accuracy: {val_accuracy:.2f}% | "
+              f"Avg Tokens: {avg_tokens_generated:.2f}")
+
+        # ─── Log metrics ───────────────────────────────────────────────
         wandb_run.log({
-            "train/avg_loss": avg_train_loss,
-            "val/loss":       val_loss_avg,
-            "val/accuracy":   val_accuracy,
-            "val/epoch":      epoch+1,
-            "curriculum":     stage
+            "train/avg_loss":       avg_train_loss,
+            "val/loss":             val_loss_avg,
+            "val/accuracy":         val_accuracy,
+            "val/generated_tokens": avg_tokens_generated,
+            "val/epoch":            epoch+1,
+            "curriculum":           stage
         })
 
+        # ─── Append to CSV ────────────────────────────────────────────
+        with open(metrics_csv, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                epoch+1,
+                stage,
+                f"{val_loss_avg:.4f}",
+                f"{val_accuracy:.2f}",
+                f"{avg_tokens_generated:.2f}"
+            ])
+
         # ─── Checkpoint Saving ───────────────────────────────────────
-        # 1) epoch checkpoint
         ckpt_epoch = epoch+1
         ckpt_path  = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
         torch.save(model.state_dict(), ckpt_path)
         wandb.save(ckpt_path)
 
-        # 2) best.pt if improved
+        # ─── Best Model & Info ───────────────────────────────────────
         if val_loss_avg < best_val_loss:
             best_val_loss = val_loss_avg
             best_path = os.path.join(save_dir, "best.pt")
             torch.save(model.state_dict(), best_path)
             print(f"🔥 New best model saved: {best_path}")
+
+            # ✅ Save JSON with epoch & metrics
+            best_info = {
+                "epoch": epoch+1,
+                "val_loss": round(val_loss_avg, 4),
+                "val_accuracy": round(val_accuracy, 2),
+                "avg_tokens": round(avg_tokens_generated, 2)
+            }
+            best_info_path = os.path.join(save_dir, "best_info.json")
+            with open(best_info_path, "w") as f:
+                json.dump(best_info, f, indent=2)
+            print(f"📄 Best info saved at: {best_info_path}")
 
         elapsed = time.time() - epoch_start
         print(f"⏱️ Time taken: {elapsed/60:.2f} mins")
