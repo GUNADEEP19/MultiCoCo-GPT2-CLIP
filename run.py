@@ -34,15 +34,12 @@ def inject_latents(batch, Z, model, latent_token_id):
     latent_mask = (input_ids == latent_token_id)  # (B, L)
     B, L, H = token_embeddings.shape
 
-    # Flatten
     flat_mask = latent_mask.view(B * L)
     flat_embeds = token_embeddings.view(B * L, H)
 
-    # Slice Z to match actual latent count per batch
     actual_latent_count = latent_mask.sum(dim=1)[0].item()
     Z = Z[:, :actual_latent_count, :]  # ensure it matches
 
-    # Scatter Z into token embedding positions
     flat_embeds[flat_mask] = Z.reshape(-1, H)
     return flat_embeds.view(B, L, H)
 
@@ -57,10 +54,10 @@ def main():
     configs.lr = float(configs.lr)
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
-    configs.latent_dim = int(configs.latent_dim)
-    configs.n_latents = int(configs.n_latents)
-    configs.latent_lr = float(configs.latent_lr)
-    configs.e_steps = int(configs.e_steps)
+    configs.latent_dim = int(getattr(configs, "latent_dim", 768))
+    configs.n_latents = int(getattr(configs, "n_latents", 8))
+    configs.latent_lr = float(getattr(configs, "latent_lr", 5e-3))
+    configs.e_steps = int(getattr(configs, "e_steps", 2))
 
     wandb.login()
     wandb_run = wandb.init(
@@ -117,8 +114,9 @@ def main():
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
     n_train = len(train_data)
+    hidden_size = model.base_causallm.config.hidden_size if hasattr(model, "base_causallm") else model.config.hidden_size
     all_latents = torch.randn(
-        n_train, configs.n_latents,model.base_causallm.config.hidden_size,
+        n_train, configs.n_latents, hidden_size,
         requires_grad=True, device=device
     )
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
@@ -127,11 +125,7 @@ def main():
     scaler = GradScaler()
 
     best_val = float("inf")
-
-    train_losses = []
-    val_losses = []
-    accuracies = []
-    token_counts = []
+    train_losses, val_losses, accuracies, token_counts = [], [], [], []
 
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
@@ -196,14 +190,12 @@ def main():
         val_ds = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
         val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
 
-        vloss = 0.0
-        correct = tot = tokens = 0
+        vloss, correct, tot, tokens = 0.0, 0, 0, 0
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating", leave=False):
                 idxs = batch["idx"].to(device)
                 Z = all_latents[idxs]
-
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
                 out = model(inputs_embeds=inputs_embeds,
@@ -252,7 +244,6 @@ def main():
             "epoch": epoch+1
         })
 
-        # Save per-epoch plot
         fig = plt.figure()
         plt.plot(train_losses, label="train")
         plt.plot(val_losses, label="val")
@@ -264,6 +255,43 @@ def main():
         plt.close(fig)
 
         print(f"⏱ Epoch time: {(time.time() - epoch_start) / 60:.2f} mins")
+
+    # Final plots
+    epochs = list(range(1, len(train_losses) + 1))
+
+    plt.figure()
+    plt.plot(epochs, train_losses, label="train")
+    plt.plot(epochs, val_losses, label="val")
+    plt.title("Final Loss Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    final_loss_path = os.path.join(save_dir, "final_loss_curve.png")
+    plt.savefig(final_loss_path)
+    plt.close()
+    wandb.log({"final/loss_curve": wandb.Image(final_loss_path)})
+
+    plt.figure()
+    plt.plot(epochs, accuracies, label="val accuracy")
+    plt.title("Final Accuracy Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    final_acc_path = os.path.join(save_dir, "final_accuracy_curve.png")
+    plt.savefig(final_acc_path)
+    plt.close()
+    wandb.log({"final/accuracy_curve": wandb.Image(final_acc_path)})
+
+    plt.figure()
+    plt.plot(epochs, token_counts, label="avg tokens")
+    plt.title("Final Avg Token Curve")
+    plt.xlabel("Epoch")
+    plt.ylabel("Tokens")
+    plt.legend()
+    final_token_path = os.path.join(save_dir, "final_token_curve.png")
+    plt.savefig(final_token_path)
+    plt.close()
+    wandb.log({"final/token_curve": wandb.Image(final_token_path)})
 
     wandb_run.finish()
 
