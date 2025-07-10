@@ -160,10 +160,15 @@ def main():
                 latent_optimizer.zero_grad()
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
-                with autocast():
-                    outputs = model(inputs_embeds=inputs_embeds,
+                with autocast(device_type='cuda'):
+                    outputs = model(
+                                    input_ids=batch["input_ids"].to(device),
+                                    position_ids=batch["position_ids"].to(device),
+                                    inputs_embeds=inputs_embeds,
                                     attention_mask=batch["attention_mask"].to(device),
-                                    labels=labels)
+                                    labels=labels
+                                    )
+
                     loss_z = outputs.loss
                 loss_z.backward()
                 latent_optimizer.step()
@@ -175,10 +180,14 @@ def main():
 
             inputs_embeds = inject_latents(batch, all_latents[idxs], model, LATENT_ID)
             labels = batch["labels"].to(device)
-            with autocast():
-                outputs = model(inputs_embeds=inputs_embeds,
-                                attention_mask=batch["attention_mask"].to(device),
-                                labels=labels)
+            with autocast(device_type='cuda'):
+                    outputs = model(
+                        input_ids=batch["input_ids"].to(device),
+                        position_ids=batch["position_ids"].to(device),
+                        inputs_embeds=inputs_embeds,
+                        attention_mask=batch["attention_mask"].to(device),
+                        labels=labels
+                    )
                 loss_m = outputs.loss
             scaler.scale(loss_m).backward()
             scaler.step(optimizer)
