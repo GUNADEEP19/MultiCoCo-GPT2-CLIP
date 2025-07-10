@@ -113,7 +113,7 @@ def main():
 
     n_train = len(train_data)
     all_latents = torch.randn(
-        n_train, configs.n_latents, model.config.hidden_size,
+        n_train, configs.n_latents,model.base_causallm.config.hidden_size,
         requires_grad=True, device=device
     )
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
