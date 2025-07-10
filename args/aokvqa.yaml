@@ -38,7 +38,7 @@ e_steps: 3                # Number of E-step optimization steps per batch
 
 # 🏋️ Training configs for Colab Free Tier
 num_epochs: 25
-batch_size_training: 1         # Small to fit GPU memory
+batch_size_training: 8         # Small to fit GPU memory
 gradient_accumulation_steps: 2 # Simulates effective batch size of 2
 lr: 5e-5
 weight_decay: 0.0
