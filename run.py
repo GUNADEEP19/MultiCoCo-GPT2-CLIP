@@ -25,19 +25,24 @@ def decode_preds(pred_ids, tokenizer):
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 def inject_latents(batch, Z, model):
-    input_ids = batch["input_ids"]
-    token_embeds_fn = model.module if hasattr(model, "module") else model
-    token_embeds = token_embeds_fn.get_input_embeddings()(input_ids.to(model.device))
+    input_ids = batch["input_ids"]           # (B, L)
 
-    latent_mask = (input_ids == batch["latent_token_id"])
-    B, L, H = token_embeds.shape
+    # get underlying base model (unwrap if using DataParallel)
+    model_base = model.module if hasattr(model, "module") else model
+    if hasattr(model_base, "base_causallm"):  # unwrap Coconut
+        model_base = model_base.base_causallm
+
+    token_embeddings = model_base.get_input_embeddings()(input_ids.to(model.device))
+
+    latent_mask = (input_ids == batch["latent_token_id"])  # boolean mask (B, L)
+    B, L, H = token_embeddings.shape
 
     Z = Z.to(model.device)
     assert Z.shape[1] == latent_mask.sum(dim=1)[0], \
-        "Mismatch between Z and number of <|latent|> tokens"
+        "Number of inferred latents does not match number of <|latent|> tokens"
 
     flat_mask = latent_mask.view(B * L)
-    flat_embeds = token_embeds.view(B * L, H)
+    flat_embeds = token_embeddings.view(B * L, H)
     flat_embeds[flat_mask] = Z.reshape(-1, H)
     return flat_embeds.view(B, L, H)
 
