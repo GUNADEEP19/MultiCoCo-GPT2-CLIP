@@ -24,7 +24,7 @@ def decode_preds(pred_ids, tokenizer):
     pred_ids = [i for i in pred_ids if i != -100]
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
-def inject_latents(batch, Z, model):
+def inject_latents(batch, Z, model, latent_token_id):
     """
     Replace the special <|latent|> token positions in the batch's input_ids
     with the continuous latents Z, producing inputs_embeds for the model.
@@ -39,7 +39,7 @@ def inject_latents(batch, Z, model):
     device = next(model.parameters()).device
     token_embeddings = model_base.get_input_embeddings()(input_ids.to(device))
 
-    latent_mask = (input_ids == batch["latent_token_id"])  # (B, L)
+    latent_mask = (input_ids == latent_token_id)  # (B, L)
     B, L, H = token_embeddings.shape
 
     Z = Z.to(device)
@@ -157,7 +157,7 @@ def main():
             model.eval()
             for _ in range(configs.e_steps):
                 latent_optimizer.zero_grad()
-                inputs_embeds = inject_latents(batch, Z, model)
+                inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
                 with autocast():
                     outputs = model(inputs_embeds=inputs_embeds,
@@ -172,7 +172,7 @@ def main():
             model.train()
             optimizer.zero_grad()
 
-            inputs_embeds = inject_latents(batch, all_latents[idxs], model)
+            inputs_embeds = inject_latents(batch, all_latents[idxs], model, LATENT_ID)
             labels = batch["labels"].to(device)
             with autocast():
                 outputs = model(inputs_embeds=inputs_embeds,
@@ -209,7 +209,7 @@ def main():
                 idxs = batch["idx"].to(device)
                 Z = all_latents[idxs]
 
-                inputs_embeds = inject_latents(batch, Z, model)
+                inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
                 out = model(inputs_embeds=inputs_embeds,
                             attention_mask=batch["attention_mask"].to(device),
