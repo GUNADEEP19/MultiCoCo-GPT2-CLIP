@@ -29,7 +29,7 @@ def inject_latents(batch, Z, model, latent_token_id):
     B, L = input_ids.shape
     device = input_ids.device
 
-    # Get embeddings from base model and move to correct device
+    # Get embeddings from base model
     base_model = model.module.base_causallm if hasattr(model, "module") else model.base_causallm
     embedding_layer = base_model.get_input_embeddings().to(device)
     token_embeddings = embedding_layer(input_ids.to(device))  # (B, L, H)
@@ -37,14 +37,21 @@ def inject_latents(batch, Z, model, latent_token_id):
     latent_mask = (input_ids == latent_token_id)  # (B, L)
     B, L, H = token_embeddings.shape
 
-    # Flatten and insert Z
+    num_latents = latent_mask.sum(dim=1)
+    if torch.any(num_latents == 0):
+        # If any example has 0 latent tokens, skip injection for safety
+        return token_embeddings
+
+    # Flatten
     flat_mask = latent_mask.view(B * L)
     flat_embeds = token_embeddings.view(B * L, H)
-    actual_latent_count = latent_mask.sum(dim=1)[0].item()
-    Z = Z[:, :actual_latent_count, :]
-    flat_embeds[flat_mask] = Z.reshape(-1, H)
+
+    # Trim Z to actual latent count
+    actual_latents = Z[:, :num_latents[0], :]  # assuming same across batch
+    flat_embeds[flat_mask] = actual_latents.reshape(-1, H)
 
     return flat_embeds.view(B, L, H)
+
 
 
 def main():
