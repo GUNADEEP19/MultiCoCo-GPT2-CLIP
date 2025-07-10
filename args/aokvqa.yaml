@@ -30,9 +30,15 @@ epochs_per_stage: 2
 pad_latent_to_max: true
 uniform_prob: 0.1
 
+# 🧠 Latent-space configs (REQUIRED for EM-style training)
+latent_dim: 768           # GPT-2 base hidden size
+n_latents: 4              # Number of latent tokens per sample
+latent_lr: 1e-3           # Learning rate for latent vectors (E-step)
+e_steps: 3                # Number of E-step optimization steps per batch
+
 # 🏋️ Training configs for Colab Free Tier
 num_epochs: 25
-batch_size_training: 1         # ⬅️ CHANGED from 2 → 1 (reduces GPU memory usage)
-gradient_accumulation_steps: 2 # ⬅️ ADDED to simulate batch size of 2
+batch_size_training: 1         # Small to fit GPU memory
+gradient_accumulation_steps: 2 # Simulates effective batch size of 2
 lr: 5e-5
 weight_decay: 0.0
