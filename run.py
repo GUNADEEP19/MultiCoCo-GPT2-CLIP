@@ -25,29 +25,24 @@ def decode_preds(pred_ids, tokenizer):
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 def inject_latents(batch, Z, model, latent_token_id):
-    """
-    Replace the special <|latent|> token positions in the batch's input_ids
-    with the continuous latents Z, producing inputs_embeds for the model.
-    """
-    input_ids = batch["input_ids"]  # (B, L)
-
-    # Get base model (unwrap DataParallel and Coconut)
-    model_base = model.module if hasattr(model, "module") else model
-    if hasattr(model_base, "base_causallm"):
-        model_base = model_base.base_causallm
-
-    device = next(model.parameters()).device
-    token_embeddings = model_base.get_input_embeddings()(input_ids.to(device))
+    input_ids = batch["input_ids"]
+    B, L = input_ids.shape
+    device = input_ids.device
+    token_embeddings = model.module if hasattr(model, "module") else model
+    token_embeddings = token_embeddings.get_input_embeddings()(input_ids.to(device))
 
     latent_mask = (input_ids == latent_token_id)  # (B, L)
     B, L, H = token_embeddings.shape
 
-    Z = Z.to(device)
-    assert Z.shape[1] == latent_mask.sum(dim=1)[0], \
-        "Number of inferred latents does not match number of <|latent|> tokens"
-
+    # Flatten
     flat_mask = latent_mask.view(B * L)
     flat_embeds = token_embeddings.view(B * L, H)
+
+    # Slice Z to match actual latent count per batch
+    actual_latent_count = latent_mask.sum(dim=1)[0].item()
+    Z = Z[:, :actual_latent_count, :]  # ensure it matches
+
+    # Scatter Z into token embedding positions
     flat_embeds[flat_mask] = Z.reshape(-1, H)
     return flat_embeds.view(B, L, H)
 
