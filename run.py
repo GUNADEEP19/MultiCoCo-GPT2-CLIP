@@ -6,7 +6,7 @@ import csv
 import torch
 import wandb
 import argparse
-import matplotlib.pyplot as plt                                   # NEW
+import matplotlib.pyplot as plt
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -21,8 +21,38 @@ def decode_preds(pred_ids, tokenizer):
     if pred_ids.ndim == 2:
         pred_ids = pred_ids[0]
     pred_ids = pred_ids.tolist()
-    pred_ids = [id for id in pred_ids if id != -100]
+    pred_ids = [i for i in pred_ids if i != -100]
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
+
+def inject_latents(batch, Z, model):
+    """
+    Replace the special <|latent|> token positions in the batch's input_ids
+    with the continuous latents Z, producing inputs_embeds for the model.
+    Assumes:
+      - batch["input_ids"] is (B, L)
+      - Z is (B, n_latents, hidden_size)
+      - All latent tokens are contiguous and collated by MyCollator.
+    """
+    # 1) get token embeddings for all input_ids
+    input_ids = batch["input_ids"]           # (B, L)
+    token_embeds = model.module if hasattr(model, "module") else model
+    token_embeds = token_embeds.get_input_embeddings()(input_ids.to(model.device))
+    # 2) find where the latent tokens are placed (by convention MyCollator reserves them)
+    #    we assume they occupy positions `latent_start:latent_end` in the sequence
+    latent_mask = (input_ids == batch["latent_token_id"])  # boolean mask (B, L)
+    B, L, H = token_embeds.shape
+
+    # reshape Z to match those positions
+    # we assume exactly n_latents per example
+    Z = Z.to(model.device)
+    assert Z.shape[1] == latent_mask.sum(dim=1)[0], \
+        "Number of inferred latents does not match number of <|latent|> tokens"
+
+    # scatter Z into token_embeds where latent_mask is True
+    flat_mask = latent_mask.view(B * L)
+    flat_embeds = token_embeds.view(B * L, H)
+    flat_embeds[flat_mask] = Z.reshape(-1, H)
+    return flat_embeds.view(B, L, H)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -33,17 +63,21 @@ def main():
     with open(args.config_file) as f:
         cfg = yaml.safe_load(f)
     configs = Config(cfg)
-    configs.lr = float(configs.lr)
-    configs.weight_decay = float(configs.weight_decay)
-    configs.resume = int(configs.resume)
+    configs.lr              = float(configs.lr)
+    configs.weight_decay    = float(configs.weight_decay)
+    configs.resume          = int(configs.resume)
+    configs.latent_dim      = int(configs.latent_dim)     # hidden size of each latent vector
+    configs.n_latents       = int(configs.n_latents)      # how many latents per example
+    configs.latent_lr       = float(configs.latent_lr)    # E‑step learning rate
+    configs.e_steps         = int(configs.e_steps)        # how many E‑steps per batch
 
     # ─── W&B Init ────────────────────────────────────────────────────
     wandb.login()
     wandb_run = wandb.init(
-        project=configs.project,
-        name=configs.name,
-        config=vars(configs),
-        reinit=True
+        project = configs.project,
+        name    = configs.name,
+        config  = vars(configs),
+        reinit  = True
     )
 
     # ─── Set seed & device ───────────────────────────────────────────
@@ -54,22 +88,23 @@ def main():
     save_dir = os.path.join(configs.save_path, configs.name)
     os.makedirs(save_dir, exist_ok=True)
     start_epoch = configs.resume
-    ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
+    ckpt_path   = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") \
+                    if start_epoch>0 else None
 
     # Prepare metrics CSV
     metrics_csv = os.path.join(save_dir, "metrics.csv")
     if not os.path.exists(metrics_csv):
         with open(metrics_csv, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "stage", "val_loss", "val_accuracy", "avg_tokens"])
+            writer.writerow(["epoch","stage","val_loss","val_acc","avg_tokens"])
 
     # ─── Load model & tokenizer ──────────────────────────────────────
-    model = AutoModelForCausalLM.from_pretrained(configs.model_id)
+    model     = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # Special Tokens
-    special_tokens = ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
+    # add special tokens for latent injection
+    special_tokens = ["<|start-latent|>","<|latent|>","<|end-latent|>"]
     tokenizer.add_tokens(special_tokens)
     model.resize_token_embeddings(len(tokenizer))
 
@@ -87,208 +122,227 @@ def main():
         )
 
     model = model.to(device)
-    if torch.cuda.device_count() > 1:
-        print(f"✅ Using {torch.cuda.device_count()} GPUs")
+    if torch.cuda.device_count()>1:
         model = torch.nn.DataParallel(model)
 
     if ckpt_path and os.path.exists(ckpt_path):
-        print(f"[Resume] Loading checkpoint from {ckpt_path}")
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        model.load_state_dict(torch.load(ckpt_path,map_location=device))
 
-    # ─── Dataset & Collator ──────────────────────────────────────────
+    # ─── Load data & collator ────────────────────────────────────────
     train_data = get_dataset(configs.train_path)
     val_data   = get_dataset(configs.val_path)
     collator   = MyCollator(tokenizer, latent_id=LATENT_ID)
 
+    # ─── Allocate one latent per example ─────────────────────────────
+    n_train = len(train_data)
+    # shape (n_train, n_latents, hidden_size)
+    all_latents = torch.randn(
+        n_train, configs.n_latents, model.config.hidden_size,
+        requires_grad=True, device=device
+    )
+    latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
+
     # ─── Optimizer & AMP ─────────────────────────────────────────────
-    optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler    = GradScaler('cuda')
+    optimizer = optim.AdamW(model.parameters(),
+                            lr=configs.lr,
+                            weight_decay=configs.weight_decay)
+    scaler    = GradScaler()
 
-    best_val_loss = float("inf")
-    global_step = 0
+    best_val = float("inf")
 
-    # ─── History Lists for Plotting ─────────────────────────────────
-    history_train_loss = []
-    history_val_loss   = []
-    history_accuracy   = []
-    history_tokens     = []
-
+    # ─── Training loop with EM steps ─────────────────────────────────
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
-        print(f"\n🎯 Epoch {epoch+1}/{configs.num_epochs} | Curriculum Stage: {stage}")
+        print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} ===")
         epoch_start = time.time()
 
-        # ─── Training ────────────────────────────────────────────────
-        train_ds = get_cot_latent_dataset(train_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        loader   = DataLoader(train_ds, batch_size=configs.batch_size_training,
-                              shuffle=True, collate_fn=collator)
+        # prepare dataloader with indices
+        train_ds = get_cot_latent_dataset(
+            train_data, stage, configs, START_ID, LATENT_ID, END_ID
+        )
+        loader = DataLoader(
+            train_ds,
+            batch_size = configs.batch_size_training,
+            shuffle    = True,
+            collate_fn = collator
+        )
 
         model.train()
-        epoch_loss = 0.0
-        optimizer.zero_grad()
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
+        total_loss = 0.0
+        pbar = tqdm(loader, desc="Training", leave=False)
 
-        for step, batch in enumerate(pbar):
-            batch = {k: v.to(device) for k,v in batch.items() if k!="idx"}
-            with autocast(device_type="cuda"):
-                outputs = model(**batch)
-                loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
-                loss = loss.mean() / configs.gradient_accumulation_steps
+        for batch in pbar:
+            idxs = batch["idx"].to(device)  # indices of examples
+            Z    = all_latents[idxs]        # (B, n_latents, hidden)
 
-            scaler.scale(loss).backward()
-            epoch_loss += (loss.item() * configs.gradient_accumulation_steps)
-            global_step += 1
+            # — E‑step: infer Z given fixed model —
+            model.eval()
+            for _ in range(configs.e_steps):
+                latent_optimizer.zero_grad()
+                inputs_embeds = inject_latents(batch, Z, model)
+                labels = batch["labels"].to(device)
+                with autocast():
+                    outputs = model(
+                        inputs_embeds=inputs_embeds,
+                        attention_mask=batch["attention_mask"].to(device),
+                        labels=labels
+                    )
+                    loss_z = outputs.loss
+                loss_z.backward()
+                latent_optimizer.step()
 
-            if (step+1) % configs.gradient_accumulation_steps == 0:
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
+            # — M‑step: update model given fixed Z —
+            for p in all_latents.parameters():
+                p.requires_grad = False
+            model.train()
+            optimizer.zero_grad()
 
-            pbar.set_postfix(loss=round(loss.item()*configs.gradient_accumulation_steps,4))
+            inputs_embeds = inject_latents(batch, all_latents[idxs], model)
+            labels = batch["labels"].to(device)
+            with autocast():
+                outputs = model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=batch["attention_mask"].to(device),
+                    labels=labels
+                )
+                loss_m = outputs.loss
+            scaler.scale(loss_m).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            total_loss += loss_m.item()
+
+            for p in all_latents.parameters():
+                p.requires_grad = True
+
+            pbar.set_postfix(train_loss=loss_m.item())
+
+            # W&B logging of per‑step
             wandb_run.log({
-                "train/loss":  loss.item()*configs.gradient_accumulation_steps,
-                "train/epoch": epoch+1,
-                "train/step":  global_step
+                "train/loss_step": loss_m.item(),
+                "train/epoch": epoch+1
             })
 
-        avg_train_loss = epoch_loss / len(loader)
-        history_train_loss.append(avg_train_loss)
-        print(f"📉 Avg Train Loss: {avg_train_loss:.4f}")
+        avg_train = total_loss / len(loader)
+        print(f"📉 Avg train loss: {avg_train:.4f}")
 
         # ─── Validation ──────────────────────────────────────────────
         model.eval()
-        val_ds     = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
+        val_ds     = get_cot_latent_dataset(
+            val_data, stage, configs, START_ID, LATENT_ID, END_ID
+        )
+        val_loader = DataLoader(
+            val_ds, batch_size=1, shuffle=False, collate_fn=collator
+        )
 
-        val_loss_total = 0.0
-        correct = 0
-        total   = 0
-        total_tokens_generated = 0
+        vloss = 0.0
+        correct = tot = tokens = 0
 
-        print("🔍 Sample Predictions:")
         with torch.no_grad():
-            for i, batch in enumerate(tqdm(val_loader, desc="Validating", leave=False)):
-                batch   = {k: v.to(device) for k,v in batch.items() if k!="idx"}
-                outputs = model(**batch)
-                loss    = outputs[0] if isinstance(outputs, tuple) else outputs.loss
-                val_loss_total += loss.mean().item()
+            for batch in tqdm(val_loader, desc="Validating", leave=False):
+                idxs = batch["idx"].to(device)
+                Z    = all_latents[idxs]
 
-                preds  = outputs.logits.argmax(dim=-1)
-                labels = batch["labels"]
-                mask   = labels != -100
+                inputs_embeds = inject_latents(batch, Z, model)
+                labels = batch["labels"].to(device)
+                out = model(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=batch["attention_mask"].to(device),
+                    labels=labels
+                )
+                loss = out.loss
+                vloss += loss.item()
+
+                preds = out.logits.argmax(-1)
+                mask  = (labels != -100)
                 correct += ((preds==labels)&mask).sum().item()
-                total   += mask.sum().item()
+                tot     += mask.sum().item()
+                tokens  += ((preds!=model.config.pad_token_id)&mask).sum().item()
 
-                token_mask = (preds != tokenizer.pad_token_id) & (labels != -100)
-                total_tokens_generated += token_mask.sum().item()
+        avg_vl = vloss / len(val_loader)
+        acc    = 100*correct/tot
+        avg_tk = tokens/len(val_loader)
+        print(f"✅ Val loss {avg_vl:.4f} | Acc {acc:.2f}% | AvgTokens {avg_tk:.1f}")
 
-                if i<3:
-                    print(f"\nSample {i+1}")
-                    print("Q:   ", decode_preds(batch["input_ids"], tokenizer))
-                    print("Pred:", decode_preds(preds, tokenizer))
-                    print("Ans: ", decode_preds(labels, tokenizer))
+        # ─── Checkpoint ─────────────────────────────────────────────
+        ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
+        torch.save(model.state_dict(), ckpt)
+        wandb.save(ckpt)
 
-        val_loss_avg  = val_loss_total / len(val_loader)
-        val_accuracy  = 100.0 * correct/total if total>0 else 0.0
-        avg_tokens_generated = total_tokens_generated / len(val_loader)
+        if avg_vl < best_val:
+            best_val = avg_vl
+            best_ckpt = os.path.join(save_dir, "best.pt")
+            torch.save(model.state_dict(), best_ckpt)
+            with open(os.path.join(save_dir,"best_info.json"), "w") as f:
+                json.dump({
+                    "epoch": epoch+1,
+                    "val_loss": avg_vl,
+                    "val_acc": acc,
+                    "avg_tokens": avg_tk
+                }, f, indent=2)
 
-        history_val_loss.append(val_loss_avg)
-        history_accuracy.append(val_accuracy)
-        history_tokens.append(avg_tokens_generated)
-
-        print(f"\n✅ Val Loss: {val_loss_avg:.4f} | "
-              f"Accuracy: {val_accuracy:.2f}% | "
-              f"Avg Tokens: {avg_tokens_generated:.2f}")
-
-        # ─── Log metrics ───────────────────────────────────────────────
+        # ─── Log & plot ────────────────────────────────────────────
         wandb_run.log({
-            "train/avg_loss":       avg_train_loss,
-            "val/loss":             val_loss_avg,
-            "val/accuracy":         val_accuracy,
-            "val/generated_tokens": avg_tokens_generated,
-            "val/epoch":            epoch+1,
-            "curriculum":           stage
+            "train/avg_loss": avg_train,
+            "val/loss":      avg_vl,
+            "val/acc":       acc,
+            "val/avg_tokens":avg_tk,
+            "epoch":         epoch+1
         })
 
-        # ─── Append to CSV ────────────────────────────────────────────
-        with open(metrics_csv, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                epoch+1,
-                stage,
-                f"{val_loss_avg:.4f}",
-                f"{val_accuracy:.2f}",
-                f"{avg_tokens_generated:.2f}"
-            ])
-
-        # ─── Checkpoint Saving ───────────────────────────────────────
-        ckpt_epoch = epoch+1
-        ckpt_path  = os.path.join(save_dir, f"checkpoint_{ckpt_epoch}.pt")
-        torch.save(model.state_dict(), ckpt_path)
-        wandb.save(ckpt_path)
-
-        # ─── Best Model & Info ───────────────────────────────────────
-        if val_loss_avg < best_val_loss:
-            best_val_loss = val_loss_avg
-            best_path = os.path.join(save_dir, "best.pt")
-            torch.save(model.state_dict(), best_path)
-            print(f"🔥 New best model saved: {best_path}")
-
-            best_info = {
-                "epoch": epoch+1,
-                "val_loss": round(val_loss_avg, 4),
-                "val_accuracy": round(val_accuracy, 2),
-                "avg_tokens": round(avg_tokens_generated, 2)
-            }
-            best_info_path = os.path.join(save_dir, "best_info.json")
-            with open(best_info_path, "w") as f:
-                json.dump(best_info, f, indent=2)
-            print(f"📄 Best info saved at: {best_info_path}")
-
-        # ─── Epoch‑level Plots & W&B Images ─────────────────────────
-        epochs = list(range(1, epoch+2))
-
-        # 1) Loss plot
-        plt.figure()
-        plt.plot(epochs, history_train_loss, label="train")
-        plt.plot(epochs, history_val_loss,   label="val")
-        plt.title(f"Loss up to Epoch {epoch+1}")
-        plt.xlabel("epoch")
-        plt.ylabel("loss")
+        # save per‑epoch loss plot
+        fig = plt.figure()
+        plt.plot(avg_train, label="train")
+        plt.plot(avg_vl,    label="val")
+        plt.title(f"Epoch {epoch+1}")
         plt.legend()
-        loss_fig = os.path.join(save_dir, f"loss_epoch_{epoch+1}.png")
-        plt.savefig(loss_fig)
-        plt.close()
-        wandb.log({f"chart/loss_epoch_{epoch+1}": wandb.Image(loss_fig)}, step=epoch+1)
+        fpath = os.path.join(save_dir, f"loss_{epoch+1}.png")
+        fig.savefig(fpath)
+        wandb.log({f"loss_plot_{epoch+1}": wandb.Image(fpath)})
+        plt.close(fig)
 
-        # 2) Accuracy plot
-        plt.figure()
-        plt.plot(epochs, history_accuracy, label="accuracy")
-        plt.title(f"Accuracy up to Epoch {epoch+1}")
-        plt.xlabel("epoch")
-        plt.ylabel("accuracy")
-        plt.legend()
-        acc_fig = os.path.join(save_dir, f"accuracy_epoch_{epoch+1}.png")
-        plt.savefig(acc_fig)
-        plt.close()
-        wandb.log({f"chart/accuracy_epoch_{epoch+1}": wandb.Image(acc_fig)}, step=epoch+1)
-
-        # 3) Tokens plot
-        plt.figure()
-        plt.plot(epochs, history_tokens, label="avg_tokens")
-        plt.title(f"Avg Tokens up to Epoch {epoch+1}")
-        plt.xlabel("epoch")
-        plt.ylabel("tokens")
-        plt.legend()
-        tok_fig = os.path.join(save_dir, f"tokens_epoch_{epoch+1}.png")
-        plt.savefig(tok_fig)
-        plt.close()
-        wandb.log({f"chart/tokens_epoch_{epoch+1}": wandb.Image(tok_fig)}, step=epoch+1)
-
-        elapsed = time.time() - epoch_start
-        print(f"⏱️ Time taken: {elapsed/60:.2f} mins")
+        print(f"⏱ Epoch time: {(time.time()-epoch_start)/60:.2f} mins")
 
     wandb_run.finish()
+# ─── Final Summary Plots ─────────────────────────────────────────────
+epochs = list(range(1, configs.num_epochs + 1))
 
-if __name__ == "__main__":
+# Final Loss Plot
+plt.figure()
+plt.plot(epochs, history_train_loss, label="train")
+plt.plot(epochs, history_val_loss,   label="val")
+plt.title("Final Loss Curve")
+plt.xlabel("epoch")
+plt.ylabel("loss")
+plt.legend()
+final_loss_path = os.path.join(save_dir, "final_loss_curve.png")
+plt.savefig(final_loss_path)
+plt.close()
+wandb.log({"final/loss_curve": wandb.Image(final_loss_path)})
+
+# Final Accuracy Plot
+plt.figure()
+plt.plot(epochs, history_accuracy, label="val accuracy")
+plt.title("Final Accuracy Curve")
+plt.xlabel("epoch")
+plt.ylabel("accuracy")
+plt.legend()
+final_acc_path = os.path.join(save_dir, "final_accuracy_curve.png")
+plt.savefig(final_acc_path)
+plt.close()
+wandb.log({"final/accuracy_curve": wandb.Image(final_acc_path)})
+
+# Final Token Count Plot
+plt.figure()
+plt.plot(epochs, history_tokens, label="avg tokens")
+plt.title("Final Avg Token Curve")
+plt.xlabel("epoch")
+plt.ylabel("tokens")
+plt.legend()
+final_token_path = os.path.join(save_dir, "final_token_curve.png")
+plt.savefig(final_token_path)
+plt.close()
+wandb.log({"final/token_curve": wandb.Image(final_token_path)})
+
+
+if __name__=="__main__":
     main()
