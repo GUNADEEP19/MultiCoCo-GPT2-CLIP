@@ -25,19 +25,24 @@ def decode_preds(pred_ids, tokenizer):
     return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 def inject_latents(batch, Z, model):
-    input_ids = batch["input_ids"]           # (B, L)
+    """
+    Replace the special <|latent|> token positions in the batch's input_ids
+    with the continuous latents Z, producing inputs_embeds for the model.
+    """
+    input_ids = batch["input_ids"]  # (B, L)
 
-    # get underlying base model (unwrap if using DataParallel)
+    # Get base model (unwrap DataParallel and Coconut)
     model_base = model.module if hasattr(model, "module") else model
-    if hasattr(model_base, "base_causallm"):  # unwrap Coconut
+    if hasattr(model_base, "base_causallm"):
         model_base = model_base.base_causallm
 
-    token_embeddings = model_base.get_input_embeddings()(input_ids.to(model.device))
+    device = next(model.parameters()).device
+    token_embeddings = model_base.get_input_embeddings()(input_ids.to(device))
 
-    latent_mask = (input_ids == batch["latent_token_id"])  # boolean mask (B, L)
+    latent_mask = (input_ids == batch["latent_token_id"])  # (B, L)
     B, L, H = token_embeddings.shape
 
-    Z = Z.to(model.device)
+    Z = Z.to(device)
     assert Z.shape[1] == latent_mask.sum(dim=1)[0], \
         "Number of inferred latents does not match number of <|latent|> tokens"
 
