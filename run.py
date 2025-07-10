@@ -188,7 +188,7 @@ def main():
                         attention_mask=batch["attention_mask"].to(device),
                         labels=labels
                     )
-                loss_m = outputs.loss
+            loss_m = outputs.loss
             scaler.scale(loss_m).backward()
             scaler.step(optimizer)
             scaler.update()
