@@ -6,6 +6,7 @@ import csv
 import torch
 import wandb
 import argparse
+import matplotlib.pyplot as plt                                   # NEW
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -106,6 +107,12 @@ def main():
     best_val_loss = float("inf")
     global_step = 0
 
+    # ─── History Lists for Plotting ─────────────────────────────────
+    history_train_loss = []
+    history_val_loss   = []
+    history_accuracy   = []
+    history_tokens     = []
+
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
         print(f"\n🎯 Epoch {epoch+1}/{configs.num_epochs} | Curriculum Stage: {stage}")
@@ -123,7 +130,6 @@ def main():
 
         for step, batch in enumerate(pbar):
             batch = {k: v.to(device) for k,v in batch.items() if k!="idx"}
-
             with autocast(device_type="cuda"):
                 outputs = model(**batch)
                 loss = outputs[0] if isinstance(outputs, tuple) else outputs.loss
@@ -146,6 +152,7 @@ def main():
             })
 
         avg_train_loss = epoch_loss / len(loader)
+        history_train_loss.append(avg_train_loss)
         print(f"📉 Avg Train Loss: {avg_train_loss:.4f}")
 
         # ─── Validation ──────────────────────────────────────────────
@@ -156,7 +163,7 @@ def main():
         val_loss_total = 0.0
         correct = 0
         total   = 0
-        total_tokens_generated = 0  # NEW: accumulate total tokens
+        total_tokens_generated = 0
 
         print("🔍 Sample Predictions:")
         with torch.no_grad():
@@ -172,7 +179,6 @@ def main():
                 correct += ((preds==labels)&mask).sum().item()
                 total   += mask.sum().item()
 
-                # ✅ Count generated tokens (exclude padding & -100)
                 token_mask = (preds != tokenizer.pad_token_id) & (labels != -100)
                 total_tokens_generated += token_mask.sum().item()
 
@@ -184,7 +190,11 @@ def main():
 
         val_loss_avg  = val_loss_total / len(val_loader)
         val_accuracy  = 100.0 * correct/total if total>0 else 0.0
-        avg_tokens_generated = total_tokens_generated / len(val_loader)  # NEW: average per example
+        avg_tokens_generated = total_tokens_generated / len(val_loader)
+
+        history_val_loss.append(val_loss_avg)
+        history_accuracy.append(val_accuracy)
+        history_tokens.append(avg_tokens_generated)
 
         print(f"\n✅ Val Loss: {val_loss_avg:.4f} | "
               f"Accuracy: {val_accuracy:.2f}% | "
@@ -224,7 +234,6 @@ def main():
             torch.save(model.state_dict(), best_path)
             print(f"🔥 New best model saved: {best_path}")
 
-            # ✅ Save JSON with epoch & metrics
             best_info = {
                 "epoch": epoch+1,
                 "val_loss": round(val_loss_avg, 4),
@@ -235,6 +244,46 @@ def main():
             with open(best_info_path, "w") as f:
                 json.dump(best_info, f, indent=2)
             print(f"📄 Best info saved at: {best_info_path}")
+
+        # ─── Epoch‑level Plots & W&B Images ─────────────────────────
+        epochs = list(range(1, epoch+2))
+
+        # 1) Loss plot
+        plt.figure()
+        plt.plot(epochs, history_train_loss, label="train")
+        plt.plot(epochs, history_val_loss,   label="val")
+        plt.title(f"Loss up to Epoch {epoch+1}")
+        plt.xlabel("epoch")
+        plt.ylabel("loss")
+        plt.legend()
+        loss_fig = os.path.join(save_dir, f"loss_epoch_{epoch+1}.png")
+        plt.savefig(loss_fig)
+        plt.close()
+        wandb.log({f"chart/loss_epoch_{epoch+1}": wandb.Image(loss_fig)}, step=epoch+1)
+
+        # 2) Accuracy plot
+        plt.figure()
+        plt.plot(epochs, history_accuracy, label="accuracy")
+        plt.title(f"Accuracy up to Epoch {epoch+1}")
+        plt.xlabel("epoch")
+        plt.ylabel("accuracy")
+        plt.legend()
+        acc_fig = os.path.join(save_dir, f"accuracy_epoch_{epoch+1}.png")
+        plt.savefig(acc_fig)
+        plt.close()
+        wandb.log({f"chart/accuracy_epoch_{epoch+1}": wandb.Image(acc_fig)}, step=epoch+1)
+
+        # 3) Tokens plot
+        plt.figure()
+        plt.plot(epochs, history_tokens, label="avg_tokens")
+        plt.title(f"Avg Tokens up to Epoch {epoch+1}")
+        plt.xlabel("epoch")
+        plt.ylabel("tokens")
+        plt.legend()
+        tok_fig = os.path.join(save_dir, f"tokens_epoch_{epoch+1}.png")
+        plt.savefig(tok_fig)
+        plt.close()
+        wandb.log({f"chart/tokens_epoch_{epoch+1}": wandb.Image(tok_fig)}, step=epoch+1)
 
         elapsed = time.time() - epoch_start
         print(f"⏱️ Time taken: {elapsed/60:.2f} mins")
