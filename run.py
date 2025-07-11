@@ -176,7 +176,8 @@ def main():
                 loss_z.backward()
                 latent_optimizer.step()
 
-            for p in all_latents.parameters(): p.requires_grad = False
+            # Disable gradients for all_latents
+            all_latents.requires_grad = False
             model.train()
             optimizer.zero_grad()
 
@@ -196,7 +197,7 @@ def main():
             scaler.update()
             total_loss += loss_m.item()
 
-            for p in all_latents.parameters(): p.requires_grad = True
+            all_latents.requires_grad = True
             pbar.set_postfix(train_loss=loss_m.item())
             wandb_run.log({"train/loss_step": loss_m.item(), "train/epoch": epoch+1})
 
