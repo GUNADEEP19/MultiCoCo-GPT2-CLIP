@@ -157,7 +157,7 @@ def main():
                 latent_optimizer.zero_grad()
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
-                with autocast():
+                with autocast(device_type='cuda'):
                     outputs = model(
                         input_ids=batch["input_ids"].to(device),
                         position_ids=batch.get("position_ids", None),
@@ -177,7 +177,7 @@ def main():
 
             inputs_embeds = inject_latents(batch, all_latents[idxs], model, LATENT_ID)
             labels = batch["labels"].to(device)
-            with autocast():
+            with autocast(device_type='cuda'):
                 outputs = model(
                     input_ids=batch["input_ids"].to(device),
                     position_ids=batch.get("position_ids", None),
