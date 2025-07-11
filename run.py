@@ -53,7 +53,7 @@ def main():
     with open(args.config_file) as f:
         cfg = yaml.safe_load(f)
     configs = Config(cfg)
-
+    # cast numeric configs
     configs.lr = float(configs.lr)
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
@@ -84,18 +84,21 @@ def main():
             writer = csv.writer(f)
             writer.writerow(["epoch", "stage", "val_loss", "val_acc", "avg_tokens"])
 
-    model = AutoModelForCausalLM.from_pretrained(configs.model_id)
+    # model & tokenizer
+    hf_model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
     special_tokens = ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     tokenizer.add_tokens(special_tokens)
-    model.resize_token_embeddings(len(tokenizer))
+    hf_model.resize_token_embeddings(len(tokenizer))
 
     LATENT_ID = tokenizer.convert_tokens_to_ids("<|latent|>")
     START_ID = tokenizer.convert_tokens_to_ids("<|start-latent|>")
     END_ID = tokenizer.convert_tokens_to_ids("<|end-latent|>")
 
+    # Wrap in Coconut if needed
+    model = hf_model
     if configs.coconut:
         model = Coconut(
             base_causallm=model,
@@ -104,18 +107,21 @@ def main():
             end_latent_id=END_ID,
             eos_token_id=tokenizer.eos_token_id
         )
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.to(device)
-        print(f"[DEBUG] Model loaded on device: {device}")
 
+    # Resize embeddings on base model
     model.base_causallm.resize_token_embeddings(len(tokenizer))
+
+    # Move entire model wrapper to device
     model = model.to(device)
+    print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
+
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
 
     if ckpt_path and os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
+    # data
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
@@ -139,8 +145,7 @@ def main():
         epoch_start = time.time()
 
         train_ds = get_cot_latent_dataset(train_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        loader = DataLoader(train_ds, batch_size=configs.batch_size_training,
-                            shuffle=True, collate_fn=collator)
+        loader = DataLoader(train_ds, batch_size=configs.batch_size_training, shuffle=True, collate_fn=collator)
 
         model.train()
         total_loss = 0.0
@@ -160,7 +165,7 @@ def main():
                         batch["position_ids"] = batch["position_ids"].to(device)
                     outputs = model(
                         input_ids=batch["input_ids"].to(device),
-                        position_ids=batch.get("position_ids", None),
+                        position_ids=batch.get("position_ids"),
                         inputs_embeds=inputs_embeds,
                         attention_mask=batch["attention_mask"].to(device),
                         labels=labels
@@ -169,8 +174,7 @@ def main():
                 loss_z.backward()
                 latent_optimizer.step()
 
-            for p in all_latents.parameters():
-                p.requires_grad = False
+            for p in all_latents.parameters(): p.requires_grad = False
             model.train()
             optimizer.zero_grad()
 
@@ -181,7 +185,7 @@ def main():
                     batch["position_ids"] = batch["position_ids"].to(device)
                 outputs = model(
                     input_ids=batch["input_ids"].to(device),
-                    position_ids=batch.get("position_ids", None),
+                    position_ids=batch.get("position_ids"),
                     inputs_embeds=inputs_embeds,
                     attention_mask=batch["attention_mask"].to(device),
                     labels=labels
@@ -192,14 +196,9 @@ def main():
             scaler.update()
             total_loss += loss_m.item()
 
-            for p in all_latents.parameters():
-                p.requires_grad = True
-
+            for p in all_latents.parameters(): p.requires_grad = True
             pbar.set_postfix(train_loss=loss_m.item())
-            wandb_run.log({
-                "train/loss_step": loss_m.item(),
-                "train/epoch": epoch+1
-            })
+            wandb_run.log({"train/loss_step": loss_m.item(), "train/epoch": epoch+1})
 
         avg_train = total_loss / len(loader)
         train_losses.append(avg_train)
@@ -216,20 +215,16 @@ def main():
                 Z = all_latents[idxs]
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
-
-                # ✅ FIXED: Move position_ids to device if present
                 if batch.get("position_ids") is not None:
                     batch["position_ids"] = batch["position_ids"].to(device)
-
                 out = model(
                     inputs_embeds=inputs_embeds,
                     attention_mask=batch["attention_mask"].to(device),
-                    position_ids=batch.get("position_ids", None),
+                    position_ids=batch.get("position_ids"),
                     labels=labels
                 )
                 loss = out.loss
                 vloss += loss.item()
-
                 preds = out.logits.argmax(-1)
                 mask = (labels != -100)
                 correct += ((preds == labels) & mask).sum().item()
@@ -254,20 +249,8 @@ def main():
             best_ckpt = os.path.join(save_dir, "best.pt")
             torch.save(model.state_dict(), best_ckpt)
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
-                json.dump({
-                    "epoch": epoch+1,
-                    "val_loss": avg_vl,
-                    "val_acc": acc,
-                    "avg_tokens": avg_tk
-                }, f, indent=2)
-
-        wandb_run.log({
-            "train/avg_loss": avg_train,
-            "val/loss": avg_vl,
-            "val/acc": acc,
-            "val/avg_tokens": avg_tk,
-            "epoch": epoch+1
-        })
+                json.dump({"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}, f, indent=2)
+        wandb_run.log({"train/avg_loss": avg_train, "val/loss": avg_vl, "val/acc": acc, "val/avg_tokens": avg_tk, "epoch": epoch+1})
 
         fig = plt.figure()
         plt.plot(train_losses, label="train")
@@ -278,7 +261,6 @@ def main():
         fig.savefig(fpath)
         wandb.log({f"loss_plot_{epoch+1}": wandb.Image(fpath)})
         plt.close(fig)
-
         print(f"⏱ Epoch time: {(time.time() - epoch_start)/60:.2f} mins")
 
     wandb_run.finish()
