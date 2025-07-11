@@ -52,6 +52,7 @@ class Coconut(nn.Module):
         attention_mask,
         labels,
         pixel_values=None,
+        position_ids=None,  # <-- added
         **kwargs,
     ):
         device = self.embedding.weight.device
@@ -60,6 +61,8 @@ class Coconut(nn.Module):
         labels = labels.to(device)
         if pixel_values is not None:
             pixel_values = pixel_values.to(device)
+        if position_ids is not None:
+            position_ids = position_ids.to(device)
 
         logits = []
 
@@ -91,25 +94,22 @@ class Coconut(nn.Module):
 
         # Stage-wise latent updates
         for pass_idx in range(max_n_latents):
-            if kv_cache is None:
-                out = self.base_causallm(
-                    inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
-                    attention_mask=attention_mask[:, next_compute_range[0]:next_compute_range[1]],
-                    output_hidden_states=True,
-                )
-                offset = 0
-            else:
+            causallm_kwargs = dict(
+                inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
+                attention_mask=attention_mask[:, next_compute_range[0]:next_compute_range[1]],
+                output_hidden_states=True,
+            )
+            if position_ids is not None:
+                causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:next_compute_range[1]]
+            if kv_cache is not None:
                 past = [
                     (k[:, :, : next_compute_range[0], :], v[:, :, : next_compute_range[0], :])
                     for k, v in kv_cache
                 ]
-                out = self.base_causallm(
-                    inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
-                    attention_mask=attention_mask[:, : next_compute_range[1]],
-                    past_key_values=past,
-                    output_hidden_states=True,
-                )
-                offset = next_compute_range[0]
+                causallm_kwargs["past_key_values"] = past
+                causallm_kwargs["attention_mask"] = attention_mask[:, : next_compute_range[1]]
+            out = self.base_causallm(**causallm_kwargs)
+            offset = 0 if kv_cache is None else next_compute_range[0]
 
             logits.append(out.logits)
             next_compute_range = (
@@ -133,12 +133,16 @@ class Coconut(nn.Module):
             if kv_cache
             else None
         )
-        out = self.base_causallm(
+        causallm_kwargs = dict(
             inputs_embeds=inputs_embeds[:, next_compute_range[0]:, :],
             attention_mask=attention_mask,
-            past_key_values=final_past,
             output_hidden_states=True,
         )
+        if position_ids is not None:
+            causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:]
+        if final_past is not None:
+            causallm_kwargs["past_key_values"] = final_past
+        out = self.base_causallm(**causallm_kwargs)
         logits.append(out.logits)
 
         self.gen_forward_cnt += max_n_latents + 1
