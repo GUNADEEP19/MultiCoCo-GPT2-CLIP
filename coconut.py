@@ -7,7 +7,7 @@ from collections import namedtuple
 from transformers.models.gpt2 import GPT2LMHeadModel
 from transformers import CLIPModel
 
-# Suppress warnings
+# Suppress specific warnings
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 warnings.filterwarnings("ignore", message=".*past_key_values.*")
 warnings.filterwarnings("ignore", message=".*Was asked to gather along dimension 0.*")
@@ -33,7 +33,7 @@ class Coconut(nn.Module):
         self.end_latent_id = end_latent_id
         self.eos_token_id = eos_token_id
 
-        # Get embedding layer
+        # Embedding layer reference
         if isinstance(self.base_causallm, GPT2LMHeadModel):
             self.embedding = self.base_causallm.transformer.get_input_embeddings()
         else:
@@ -51,7 +51,6 @@ class Coconut(nn.Module):
         input_ids,
         attention_mask,
         labels,
-        position_ids=None,
         pixel_values=None,
         **kwargs,
     ):
@@ -59,14 +58,12 @@ class Coconut(nn.Module):
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
         labels = labels.to(device)
-        if position_ids is not None:
-            position_ids = position_ids.to(device)
         if pixel_values is not None:
             pixel_values = pixel_values.to(device)
 
         logits = []
 
-        # Latent token positions per batch
+        # Identify latent token positions
         latent_indices = (input_ids == self.latent_token_id).nonzero()
         latent_lists = [
             [idx[1].item() for idx in latent_indices if idx[0] == b]
@@ -75,9 +72,10 @@ class Coconut(nn.Module):
         max_n_latents = max(len(l) for l in latent_lists)
         next_compute_range = (0, input_ids.size(1))
 
+        # Initial embeddings
         inputs_embeds = self.embedding(input_ids)
 
-        # Add image embedding at token 0
+        # Inject image features at first token
         if pixel_values is not None:
             with torch.no_grad():
                 self.vision_encoder.eval()
@@ -85,29 +83,29 @@ class Coconut(nn.Module):
             image_features = self.vision_projector(image_features)
             inputs_embeds[:, 0, :] += image_features
 
+        # Restrict first pass if latents exist
         if max_n_latents > 0:
             next_compute_range = (0, latent_indices[:, 1].min().item())
 
         kv_cache = None
 
+        # Stage-wise latent updates
         for pass_idx in range(max_n_latents):
             if kv_cache is None:
                 out = self.base_causallm(
                     inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
                     attention_mask=attention_mask[:, next_compute_range[0]:next_compute_range[1]],
-                    position_ids=position_ids[:, next_compute_range[0]:next_compute_range[1]] if position_ids is not None else None,
                     output_hidden_states=True,
                 )
                 offset = 0
             else:
                 past = [
-                    (k[:, :, :next_compute_range[0], :], v[:, :, :next_compute_range[0], :])
+                    (k[:, :, : next_compute_range[0], :], v[:, :, : next_compute_range[0], :])
                     for k, v in kv_cache
                 ]
                 out = self.base_causallm(
                     inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
-                    attention_mask=attention_mask[:, :next_compute_range[1]],
-                    position_ids=position_ids[:, next_compute_range[0]:next_compute_range[1]] if position_ids is not None else None,
+                    attention_mask=attention_mask[:, : next_compute_range[1]],
                     past_key_values=past,
                     output_hidden_states=True,
                 )
@@ -121,6 +119,7 @@ class Coconut(nn.Module):
             hidden_states = out.hidden_states[-1]
             kv_cache = out.past_key_values
 
+            # Write back latent embeddings
             for b_idx, pos_list in enumerate(latent_lists):
                 if pass_idx < len(pos_list):
                     t_idx = pos_list[pass_idx]
@@ -128,15 +127,15 @@ class Coconut(nn.Module):
                     if 0 <= local_idx < hidden_states.size(1):
                         inputs_embeds[b_idx, t_idx, :] = hidden_states[b_idx, local_idx, :]
 
-        # Final forward pass
+        # Final full pass
         final_past = (
-            [(k[:, :, :next_compute_range[0], :], v[:, :, :next_compute_range[0], :]) for k, v in kv_cache]
-            if kv_cache else None
+            [(k[:, :, : next_compute_range[0], :], v[:, :, : next_compute_range[0], :]) for k, v in kv_cache]
+            if kv_cache
+            else None
         )
         out = self.base_causallm(
             inputs_embeds=inputs_embeds[:, next_compute_range[0]:, :],
-            attention_mask=attention_mask[:, :],
-            position_ids=position_ids[:, next_compute_range[0]:] if position_ids is not None else None,
+            attention_mask=attention_mask,
             past_key_values=final_past,
             output_hidden_states=True,
         )
@@ -145,6 +144,7 @@ class Coconut(nn.Module):
         self.gen_forward_cnt += max_n_latents + 1
         logits = torch.cat(logits, dim=1)
 
+        # Compute loss
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
         loss = CrossEntropyLoss()(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
@@ -170,9 +170,9 @@ class Coconut(nn.Module):
         assert input_ids.size(0) == 1, "Only batch_size=1 supported"
         tokens = input_ids[0].tolist()
         labels = input_ids.clone()
-        position_ids = torch.arange(0, input_ids.size(1), dtype=torch.long, device=input_ids.device).unsqueeze(0)
+        # Let GPT-2 handle positions internally
 
-        out = self.forward(input_ids, attention_mask, labels, position_ids)
+        out = self.forward(input_ids, attention_mask, labels)
         inputs_embeds = out.inputs_embeds
         next_token = out.logits[0, -1].argmax().item()
         tokens.append(next_token)
