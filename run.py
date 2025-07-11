@@ -106,6 +106,7 @@ def main():
             end_latent_id=END_ID,
             eos_token_id=tokenizer.eos_token_id
         )
+    model.base_causallm.resize_token_embeddings(len(tokenizer))  # ✅ ADD THIS LINE
 
     model = model.to(device)
     if torch.cuda.device_count() > 1:
