@@ -58,7 +58,7 @@ class Coconut(nn.Module):
         position_ids,
         pixel_values=None,
         **kwargs
-        ):
+    ):
         device = self.embedding.weight.device
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
@@ -66,6 +66,12 @@ class Coconut(nn.Module):
         position_ids = position_ids.to(device)
         if pixel_values is not None:
             pixel_values = pixel_values.to(device)
+
+        # ✅ Safety device assertions
+        assert input_ids.device == device
+        assert attention_mask.device == device
+        assert position_ids.device == device
+        assert labels.device == device
 
         logits = []
 
@@ -99,34 +105,32 @@ class Coconut(nn.Module):
 
         # stage‑wise passes
         for pass_idx in range(max_n_latents):
-            # cold start or with cache
             if kv_cache is None:
                 outputs = self.base_causallm(
                     inputs_embeds=inputs_embeds[
-                        :, next_compute_range[0] : next_compute_range[1], :
+                        :, next_compute_range[0]:next_compute_range[1], :
                     ],
                     attention_mask=attention_mask[
-                        :, next_compute_range[0] : next_compute_range[1]
+                        :, next_compute_range[0]:next_compute_range[1]
                     ],
                     position_ids=position_ids[
-                        :, next_compute_range[0] : next_compute_range[1]
+                        :, next_compute_range[0]:next_compute_range[1]
                     ],
                     output_hidden_states=True,
                 )
                 offset = 0
             else:
-                # build legacy past_key_values tuple
                 past = [
-                    (k[:, :, : next_compute_range[0], :], v[:, :, : next_compute_range[0], :])
+                    (k[:, :, :next_compute_range[0], :], v[:, :, :next_compute_range[0], :])
                     for k, v in kv_cache
                 ]
                 outputs = self.base_causallm(
                     inputs_embeds=inputs_embeds[
-                        :, next_compute_range[0] : next_compute_range[1], :
+                        :, next_compute_range[0]:next_compute_range[1], :
                     ],
-                    attention_mask=attention_mask[:, : next_compute_range[1]],
+                    attention_mask=attention_mask[:, :next_compute_range[1]],
                     position_ids=position_ids[
-                        :, next_compute_range[0] : next_compute_range[1]
+                        :, next_compute_range[0]:next_compute_range[1]
                     ],
                     past_key_values=past,
                     output_hidden_states=True,
@@ -134,7 +138,6 @@ class Coconut(nn.Module):
                 offset = next_compute_range[0]
 
             logits.append(outputs.logits)
-            # update range for next pass
             next_compute_range = (
                 next_compute_range[1],
                 input_ids.shape[1]
@@ -144,7 +147,6 @@ class Coconut(nn.Module):
             hidden_states = outputs.hidden_states[-1]
             kv_cache = outputs.past_key_values
 
-            # “write back” hidden states into latent token slots
             for b_idx, latent_pos_list in enumerate(latent_lists):
                 if pass_idx < len(latent_pos_list):
                     t_idx = latent_pos_list[pass_idx]
@@ -152,19 +154,17 @@ class Coconut(nn.Module):
                     if 0 <= local_idx < hidden_states.shape[1]:
                         inputs_embeds[b_idx, t_idx, :] = hidden_states[b_idx, local_idx, :]
 
-        # final full pass
         final_past = (
-            [(k[:, :, : next_compute_range[0], :], v[:, :, : next_compute_range[0], :]) for k, v in kv_cache]
-            if kv_cache
-            else None
+            [(k[:, :, :next_compute_range[0], :], v[:, :, :next_compute_range[0], :]) for k, v in kv_cache]
+            if kv_cache else None
         )
         outputs = self.base_causallm(
             inputs_embeds=inputs_embeds[
-                :, next_compute_range[0] : next_compute_range[1], :
+                :, next_compute_range[0]:next_compute_range[1], :
             ],
-            attention_mask=attention_mask[:, : next_compute_range[1]],
+            attention_mask=attention_mask[:, :next_compute_range[1]],
             position_ids=position_ids[
-                :, next_compute_range[0] : next_compute_range[1]
+                :, next_compute_range[0]:next_compute_range[1]
             ],
             past_key_values=final_past,
             output_hidden_states=True,
@@ -174,12 +174,12 @@ class Coconut(nn.Module):
         self.gen_forward_cnt += max_n_latents + 1
         logits = torch.cat(logits, dim=-2)
 
-        # compute loss
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
         loss_fct = CrossEntropyLoss(reduction="mean")
         loss = loss_fct(
-            shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
         )
 
         return Outputs(loss=loss, inputs_embeds=inputs_embeds, logits=logits)
@@ -200,9 +200,6 @@ class Coconut(nn.Module):
         synced_gpus=False,
         **kwargs,
     ):
-        """
-        Simplified greedy generate for batch_size=1.
-        """
         assert input_ids.shape[0] == 1, "Only batch_size=1 is supported"
         tokens = input_ids[0].tolist()
         labels = input_ids.clone()
@@ -210,7 +207,6 @@ class Coconut(nn.Module):
             0, input_ids.shape[1], dtype=torch.long, device=input_ids.device
         ).view(1, -1)
 
-        # first full forward
         out = self.forward(
             input_ids,
             attention_mask,
@@ -225,7 +221,6 @@ class Coconut(nn.Module):
         ).view(1, 1, -1)
         seq_embeds = torch.cat((inputs_embeds, new_embed), dim=1)
 
-        # subsequent greedy steps
         for _ in range(max_new_tokens - 1):
             out2 = self.base_causallm(inputs_embeds=seq_embeds)
             next_token = out2.logits[0, -1].argmax().item()
@@ -238,7 +233,6 @@ class Coconut(nn.Module):
             seq_embeds = torch.cat((seq_embeds, new_embed), dim=1)
             self.gen_forward_cnt += 1
 
-        # sync across GPUs
         if synced_gpus:
             while self.gen_forward_cnt < max_new_tokens + MAX_N_LATENT:
                 _ = self.base_causallm(inputs_embeds=seq_embeds)
