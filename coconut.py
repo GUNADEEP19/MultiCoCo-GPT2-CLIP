@@ -100,7 +100,7 @@ class Coconut(nn.Module):
                 output_hidden_states=True,
             )
             if position_ids is not None:
-                causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:next_compute_range[1]]
+                causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:next_compute_range[1]].to(device)
             if kv_cache is not None:
                 past = [
                     (k[:, :, : next_compute_range[0], :], v[:, :, : next_compute_range[0], :])
@@ -139,7 +139,7 @@ class Coconut(nn.Module):
             output_hidden_states=True,
         )
         if position_ids is not None:
-            causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:]
+            causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:].to(device)
         if final_past is not None:
             causallm_kwargs["past_key_values"] = final_past
         out = self.base_causallm(**causallm_kwargs)

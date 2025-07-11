@@ -152,22 +152,24 @@ def main():
         pbar = tqdm(loader, desc="Training", leave=False)
 
         for batch in pbar:
-            idxs = batch["idx"].to(device)
+            # Move all tensors in batch to device
+            for k in batch:
+                if isinstance(batch[k], torch.Tensor):
+                    batch[k] = batch[k].to(device)
+            idxs = batch["idx"]
             Z = all_latents[idxs]
 
             model.eval()
             for _ in range(configs.e_steps):
                 latent_optimizer.zero_grad()
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
-                labels = batch["labels"].to(device)
+                labels = batch["labels"]
                 with autocast(device_type='cuda'):
-                    if batch.get("position_ids") is not None:
-                        batch["position_ids"] = batch["position_ids"].to(device)
                     outputs = model(
-                        input_ids=batch["input_ids"].to(device),
+                        input_ids=batch["input_ids"],
                         position_ids=batch.get("position_ids"),
                         inputs_embeds=inputs_embeds,
-                        attention_mask=batch["attention_mask"].to(device),
+                        attention_mask=batch["attention_mask"],
                         labels=labels
                     )
                     loss_z = outputs.loss
@@ -179,15 +181,13 @@ def main():
             optimizer.zero_grad()
 
             inputs_embeds = inject_latents(batch, all_latents[idxs], model, LATENT_ID)
-            labels = batch["labels"].to(device)
+            labels = batch["labels"]
             with autocast(device_type='cuda'):
-                if batch.get("position_ids") is not None:
-                    batch["position_ids"] = batch["position_ids"].to(device)
                 outputs = model(
-                    input_ids=batch["input_ids"].to(device),
+                    input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),
                     inputs_embeds=inputs_embeds,
-                    attention_mask=batch["attention_mask"].to(device),
+                    attention_mask=batch["attention_mask"],
                     labels=labels
                 )
                 loss_m = outputs.loss
@@ -211,15 +211,19 @@ def main():
         vloss, correct, tot, tokens = 0.0, 0, 0, 0
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating", leave=False):
-                idxs = batch["idx"].to(device)
+                # Move all tensors in batch to device
+                for k in batch:
+                    if isinstance(batch[k], torch.Tensor):
+                        batch[k] = batch[k].to(device)
+                idxs = batch["idx"]
                 Z = all_latents[idxs]
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
-                labels = batch["labels"].to(device)
+                labels = batch["labels"]
                 if batch.get("position_ids") is not None:
                     batch["position_ids"] = batch["position_ids"].to(device)
                 out = model(
                     inputs_embeds=inputs_embeds,
-                    attention_mask=batch["attention_mask"].to(device),
+                    attention_mask=batch["attention_mask"],
                     position_ids=batch.get("position_ids"),
                     labels=labels
                 )
