@@ -58,7 +58,15 @@ class Coconut(nn.Module):
         position_ids,
         pixel_values=None,
         **kwargs
-    ):
+        ):
+        device = self.embedding.weight.device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
+        labels = labels.to(device)
+        position_ids = position_ids.to(device)
+        if pixel_values is not None:
+            pixel_values = pixel_values.to(device)
+
         logits = []
 
         # find latent positions per example
