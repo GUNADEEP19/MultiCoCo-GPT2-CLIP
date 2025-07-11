@@ -106,6 +106,12 @@ class Coconut(nn.Module):
         # stage‑wise passes
         for pass_idx in range(max_n_latents):
             if kv_cache is None:
+                # ─── DEBUG: Check device mismatch ───────────────────────────────
+                print(f"[DEBUG] input_ids.device       = {input_ids.device}")
+                print(f"[DEBUG] position_ids.device    = {position_ids.device}")
+                print(f"[DEBUG] attention_mask.device  = {attention_mask.device}")
+                print(f"[DEBUG] inputs_embeds.device   = {inputs_embeds.device}")
+                # ────────────────────────────────────────────────────────────────
                 outputs = self.base_causallm(
                     inputs_embeds=inputs_embeds[
                         :, next_compute_range[0]:next_compute_range[1], :
