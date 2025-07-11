@@ -63,11 +63,11 @@ class Coconut(nn.Module):
         if pixel_values is not None:
             pixel_values = pixel_values.to(device)
 
-        if os.environ.get("DEBUG_DEVICES") == "1":
-            print(f"[DEBUG] input_ids.device       = {input_ids.device}")
-            print(f"[DEBUG] position_ids.device    = {position_ids.device if position_ids is not None else 'None'}")
-            print(f"[DEBUG] attention_mask.device  = {attention_mask.device}")
-            print(f"[DEBUG] inputs_embeds.device   = {self.embedding(input_ids).device}")
+        
+        print(f"[DEBUG] input_ids.device       = {input_ids.device}")
+        print(f"[DEBUG] position_ids.device    = {position_ids.device if position_ids is not None else 'None'}")
+        print(f"[DEBUG] attention_mask.device  = {attention_mask.device}")
+        print(f"[DEBUG] inputs_embeds.device   = {self.embedding(input_ids).device}")
 
         logits = []
 
