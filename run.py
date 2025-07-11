@@ -120,9 +120,10 @@ def main():
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
     n_train = len(train_data)
-    hidden_size = (model.module.base_causallm.config.hidden_size
-                   if hasattr(model, "module")
-                   else model.config.hidden_size)
+    # Corrected hidden size access
+    base_model = model.module.base_causallm if hasattr(model, "module") else model.base_causallm
+    hidden_size = base_model.config.hidden_size
+
     all_latents = torch.randn(n_train, configs.n_latents, hidden_size,
                               requires_grad=True, device=device)
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
