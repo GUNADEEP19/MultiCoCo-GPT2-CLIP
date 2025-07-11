@@ -7,7 +7,7 @@ from collections import namedtuple
 from transformers.models.gpt2 import GPT2LMHeadModel
 from transformers import CLIPModel
 
-# ─── Suppress specific warnings ─────────────────────────────────────
+# Suppress warnings
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 warnings.filterwarnings("ignore", message=".*past_key_values.*")
 warnings.filterwarnings("ignore", message=".*Was asked to gather along dimension 0.*")
@@ -33,12 +33,13 @@ class Coconut(nn.Module):
         self.end_latent_id = end_latent_id
         self.eos_token_id = eos_token_id
 
+        # Get embedding layer
         if isinstance(self.base_causallm, GPT2LMHeadModel):
             self.embedding = self.base_causallm.transformer.get_input_embeddings()
         else:
             self.embedding = self.base_causallm.get_input_embeddings()
 
-        # CLIP vision encoder
+        # CLIP vision encoder + projector
         self.vision_encoder = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         self.vision_projector = nn.Linear(
             self.vision_encoder.config.projection_dim,
@@ -63,15 +64,9 @@ class Coconut(nn.Module):
         if pixel_values is not None:
             pixel_values = pixel_values.to(device)
 
-        
-        print(f"[DEBUG] input_ids.device       = {input_ids.device}")
-        print(f"[DEBUG] position_ids.device    = {position_ids.device if position_ids is not None else 'None'}")
-        print(f"[DEBUG] attention_mask.device  = {attention_mask.device}")
-        print(f"[DEBUG] inputs_embeds.device   = {self.embedding(input_ids).device}")
-
         logits = []
 
-        # latent token locations
+        # Latent token positions per batch
         latent_indices = (input_ids == self.latent_token_id).nonzero()
         latent_lists = [
             [idx[1].item() for idx in latent_indices if idx[0] == b]
@@ -82,7 +77,7 @@ class Coconut(nn.Module):
 
         inputs_embeds = self.embedding(input_ids)
 
-        # inject image features at token 0
+        # Add image embedding at token 0
         if pixel_values is not None:
             with torch.no_grad():
                 self.vision_encoder.eval()
@@ -133,6 +128,7 @@ class Coconut(nn.Module):
                     if 0 <= local_idx < hidden_states.size(1):
                         inputs_embeds[b_idx, t_idx, :] = hidden_states[b_idx, local_idx, :]
 
+        # Final forward pass
         final_past = (
             [(k[:, :, :next_compute_range[0], :], v[:, :, :next_compute_range[0], :]) for k, v in kv_cache]
             if kv_cache else None
