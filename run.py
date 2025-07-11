@@ -15,7 +15,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-from torch.amp import autocast, GradScaler  # <— switch to torch.amp
+from torch.amp import autocast, GradScaler  # switch to torch.amp
 
 def decode_preds(pred_ids, tokenizer):
     if pred_ids.ndim == 2:
@@ -53,7 +53,7 @@ def main():
     with open(args.config_file) as f:
         cfg = yaml.safe_load(f)
     configs = Config(cfg)
-    # cast numeric configs
+
     configs.lr = float(configs.lr)
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
@@ -78,14 +78,12 @@ def main():
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
-    # metrics CSV initialization
     metrics_csv = os.path.join(save_dir, "metrics.csv")
     if not os.path.exists(metrics_csv):
         with open(metrics_csv, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["epoch", "stage", "val_loss", "val_acc", "avg_tokens"])
 
-    # model & tokenizer
     model = AutoModelForCausalLM.from_pretrained(configs.model_id)
     tokenizer = AutoTokenizer.from_pretrained(configs.model_id)
     tokenizer.pad_token = tokenizer.eos_token
@@ -106,8 +104,11 @@ def main():
             end_latent_id=END_ID,
             eos_token_id=tokenizer.eos_token_id
         )
-    model.base_causallm.resize_token_embeddings(len(tokenizer))  # ✅ ADD THIS LINE
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        print(f"[DEBUG] Model loaded on device: {device}")
 
+    model.base_causallm.resize_token_embeddings(len(tokenizer))
     model = model.to(device)
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
@@ -115,18 +116,15 @@ def main():
     if ckpt_path and os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
 
-    # data
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
     collator = MyCollator(tokenizer, latent_id=LATENT_ID)
 
     n_train = len(train_data)
-    # Corrected hidden size access
     base_model = model.module.base_causallm if hasattr(model, "module") else model.base_causallm
     hidden_size = base_model.config.hidden_size
 
-    all_latents = torch.randn(n_train, configs.n_latents, hidden_size,
-                              requires_grad=True, device=device)
+    all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
@@ -152,13 +150,14 @@ def main():
             idxs = batch["idx"].to(device)
             Z = all_latents[idxs]
 
-            # E-step: optimize latents
             model.eval()
             for _ in range(configs.e_steps):
                 latent_optimizer.zero_grad()
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
                 with autocast(device_type='cuda'):
+                    if batch.get("position_ids") is not None:
+                        batch["position_ids"] = batch["position_ids"].to(device)
                     outputs = model(
                         input_ids=batch["input_ids"].to(device),
                         position_ids=batch.get("position_ids", None),
@@ -170,7 +169,6 @@ def main():
                 loss_z.backward()
                 latent_optimizer.step()
 
-            # M-step: optimize model
             for p in all_latents.parameters():
                 p.requires_grad = False
             model.train()
@@ -179,6 +177,8 @@ def main():
             inputs_embeds = inject_latents(batch, all_latents[idxs], model, LATENT_ID)
             labels = batch["labels"].to(device)
             with autocast(device_type='cuda'):
+                if batch.get("position_ids") is not None:
+                    batch["position_ids"] = batch["position_ids"].to(device)
                 outputs = model(
                     input_ids=batch["input_ids"].to(device),
                     position_ids=batch.get("position_ids", None),
@@ -205,7 +205,6 @@ def main():
         train_losses.append(avg_train)
         print(f"📉 Avg train loss: {avg_train:.4f}")
 
-        # validation
         model.eval()
         val_ds = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
         val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
@@ -217,9 +216,15 @@ def main():
                 Z = all_latents[idxs]
                 inputs_embeds = inject_latents(batch, Z, model, LATENT_ID)
                 labels = batch["labels"].to(device)
+
+                # ✅ FIXED: Move position_ids to device if present
+                if batch.get("position_ids") is not None:
+                    batch["position_ids"] = batch["position_ids"].to(device)
+
                 out = model(
                     inputs_embeds=inputs_embeds,
                     attention_mask=batch["attention_mask"].to(device),
+                    position_ids=batch.get("position_ids", None),
                     labels=labels
                 )
                 loss = out.loss
@@ -241,7 +246,6 @@ def main():
 
         print(f"✅ Val loss {avg_vl:.4f} | Acc {acc:.2f}% | AvgTokens {avg_tk:.1f}")
 
-        # checkpoint
         ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
         torch.save(model.state_dict(), ckpt)
         wandb.save(ckpt)
@@ -265,7 +269,6 @@ def main():
             "epoch": epoch+1
         })
 
-        # loss plot
         fig = plt.figure()
         plt.plot(train_losses, label="train")
         plt.plot(val_losses, label="val")
@@ -278,7 +281,6 @@ def main():
 
         print(f"⏱ Epoch time: {(time.time() - epoch_start)/60:.2f} mins")
 
-    # final curves (omitted for brevity; unchanged)
     wandb_run.finish()
 
 if __name__ == "__main__":
