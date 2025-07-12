@@ -185,7 +185,7 @@ def main():
 
         model.train()
         total_loss = 0.0
-        pbar = tqdm(loader, desc="Training", leave=False)
+        pbar = tqdm(loader, desc="Training", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
 
         for batch in pbar:
             # Move all tensors in batch to device
@@ -262,7 +262,8 @@ def main():
 
         vloss, correct, tot, tokens = 0.0, 0, 0, 0
         with torch.no_grad():
-            for batch in tqdm(val_loader, desc="Validating", leave=False):
+            vbar = tqdm(val_loader, desc="Validating", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
+            for batch in vbar:
                 # Move all tensors in batch to device
                 for k in batch:
                     if isinstance(batch[k], torch.Tensor):
@@ -287,6 +288,7 @@ def main():
                 correct += ((preds == labels) & mask).sum().item()
                 tot += mask.sum().item()
                 tokens += ((preds != base_model.config.pad_token_id) & mask).sum().item()
+                vbar.set_postfix(val_loss=loss.item())
 
         avg_vl = vloss / len(val_loader)
         acc = 100 * correct / tot
