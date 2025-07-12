@@ -173,7 +173,7 @@ def main():
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
 
     printed_checkpoint_reminder = False
-    prev_best_ckpt = None  # Track previous best checkpoint
+    prev_best_ckpt = None  # Track previous best checkpoint (Colab only)
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
         print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} ===")
@@ -310,16 +310,16 @@ def main():
             writer = csv.writer(f)
             writer.writerow([epoch+1, stage, avg_train, avg_vl, acc, avg_tk])
 
-        # After validation, save only best.pt to Drive and W&B
+        # After validation, save only best.pt to Colab local storage, not Drive
         if avg_vl < best_val:
-            # Delete previous best checkpoint if it exists
+            # Delete previous best checkpoint in Colab if it exists
             if prev_best_ckpt is not None and os.path.exists(prev_best_ckpt):
                 os.remove(prev_best_ckpt)
             best_val = avg_vl
             patience_counter = 0
-            # Save best EMA model to Drive with informative filename
+            # Save best EMA model to Colab local storage with informative filename
             best_ckpt_name = f"best_epoch{epoch+1}_valloss{avg_vl:.4f}.pt"
-            best_ckpt = os.path.join(save_dir, best_ckpt_name)
+            best_ckpt = os.path.join(local_ckpt_dir, best_ckpt_name)
             torch.save({
                 "model": model.state_dict(),
                 "ema_model": ema_model.state_dict(),
@@ -328,9 +328,13 @@ def main():
                 "latents": all_latents,
                 "epoch": epoch+1
             }, best_ckpt)
-            wandb.save(best_ckpt, base_path=save_dir)
+            # Do NOT save best.pt to Drive or W&B
+            # Save best_info.json in both Drive and Colab local storage
+            best_info = {"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
-                json.dump({"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}, f, indent=2)
+                json.dump(best_info, f, indent=2)
+            with open(os.path.join(local_ckpt_dir, "best_info.json"), "w") as f:
+                json.dump(best_info, f, indent=2)
             prev_best_ckpt = best_ckpt  # Update tracker
         else:
             patience_counter += 1
