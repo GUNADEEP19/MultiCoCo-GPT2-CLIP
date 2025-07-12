@@ -281,7 +281,7 @@ def main():
                 mask = (labels != -100)
                 correct += ((preds == labels) & mask).sum().item()
                 tot += mask.sum().item()
-                tokens += ((preds != model.config.pad_token_id) & mask).sum().item()
+                tokens += ((preds != base_model.config.pad_token_id) & mask).sum().item()
 
         avg_vl = vloss / len(val_loader)
         acc = 100 * correct / tot
