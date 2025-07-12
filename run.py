@@ -40,11 +40,13 @@ def inject_latents(batch, Z, model, latent_token_id):
     if torch.any(num_latents == 0):
         return token_embeddings
 
-    # Inject latents per sample to avoid shape mismatch
+    # Robust per-sample injection
     for b in range(B):
         n_latent = num_latents[b].item()
-        if n_latent > 0:
-            token_embeddings[b][latent_mask[b]] = Z[b, :n_latent, :]
+        n_to_inject = min(n_latent, Z.shape[1])
+        if n_to_inject > 0:
+            latent_positions = torch.where(latent_mask[b])[0][:n_to_inject]
+            token_embeddings[b, latent_positions, :] = Z[b, :n_to_inject, :]
     return token_embeddings
 
 def main():
