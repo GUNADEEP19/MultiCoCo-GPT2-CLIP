@@ -301,7 +301,7 @@ def main():
             writer = csv.writer(f)
             writer.writerow([epoch+1, stage, avg_train, avg_vl, acc, avg_tk])
 
-        # After validation, save only best.pt to Drive, regular checkpoints to local
+        # After validation, save only best.pt to Drive
         if avg_vl < best_val:
             best_val = avg_vl
             patience_counter = 0
@@ -316,6 +316,7 @@ def main():
                 "latents": all_latents,
                 "epoch": epoch+1
             }, best_ckpt)
+            wandb.save(best_ckpt, base_path=save_dir)
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
                 json.dump({"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}, f, indent=2)
         else:
@@ -324,22 +325,7 @@ def main():
                 print(f"🛑 Early stopping triggered! No improvement for {patience} epochs.")
                 break
 
-        # Save regular checkpoint to local Colab storage only with informative filename
-        ckpt_name = f"checkpoint_epoch{epoch+1}_valloss{avg_vl:.4f}.pt"
-        ckpt = os.path.join(save_dir, ckpt_name)
-        torch.save({
-            "model": model.state_dict(),
-            "ema_model": ema_model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scaler": scaler.state_dict(),
-            "latents": all_latents,
-            "epoch": epoch+1
-        }, ckpt)
-        wandb.save(ckpt, base_path=save_dir)
-
-        # After saving the regular checkpoint, print a reminder for the user
-        print(f"[INFO] To keep a specific checkpoint (e.g., {ckpt_name}), copy it to Drive before your Colab session ends:")
-        print(f"!cp /content/checkpoints/{ckpt_name} {save_dir}/")
+        # (No regular checkpoint saving)
 
         fig = plt.figure()
         plt.plot(train_losses, label="train")
