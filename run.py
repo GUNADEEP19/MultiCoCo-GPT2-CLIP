@@ -9,7 +9,8 @@ import argparse
 import matplotlib.pyplot as plt
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+# Change tqdm import for Colab-friendly progress bars
+from tqdm.notebook import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import copy
 
@@ -167,6 +168,7 @@ def main():
 
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
 
+    printed_checkpoint_reminder = False
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
         print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} ===")
@@ -338,9 +340,11 @@ def main():
         }, ckpt)
         wandb.save(ckpt, base_path=local_ckpt_dir)
 
-        # After saving the regular checkpoint, print a reminder for the user
-        print(f"[INFO] To keep a specific checkpoint (e.g., {ckpt_name}), copy it to Drive before your Colab session ends:")
-        print(f"!cp /content/checkpoints/{ckpt_name} {save_dir}/")
+        # After saving the regular checkpoint, print a reminder for the user only once
+        if not printed_checkpoint_reminder:
+            print(f"[INFO] To keep a specific checkpoint (e.g., {ckpt_name}), copy it to Drive before your Colab session ends:")
+            print(f"!cp /content/checkpoints/{ckpt_name} {save_dir}/")
+            printed_checkpoint_reminder = True
 
         fig = plt.figure()
         plt.plot(train_losses, label="train")
