@@ -124,6 +124,15 @@ def main():
     # Encourage user to increase batch size for A100
     print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
 
+    # Prepare data and model dimensions before checkpoint logic
+    train_data = get_dataset(configs.train_path)
+    val_data = get_dataset(configs.val_path)
+    collator = MyCollator(tokenizer, latent_id=LATENT_ID)
+
+    n_train = len(train_data)
+    base_model = model.module.base_causallm if hasattr(model, "module") else model.base_causallm
+    hidden_size = base_model.config.hidden_size
+
     if ckpt_path and os.path.exists(ckpt_path):
         print(f"🔁 Resuming from checkpoint: {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device)
@@ -135,22 +144,6 @@ def main():
         scaler.load_state_dict(ckpt["scaler"])
         all_latents = ckpt["latents"].to(device).detach().requires_grad_(True)
         start_epoch = ckpt["epoch"]
-    else:
-        # Initialize all_latents only if not resuming
-        all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
-
-    # data
-    train_data = get_dataset(configs.train_path)
-    val_data = get_dataset(configs.val_path)
-    collator = MyCollator(tokenizer, latent_id=LATENT_ID)
-
-    n_train = len(train_data)
-    base_model = model.module.base_causallm if hasattr(model, "module") else model.base_causallm
-    hidden_size = base_model.config.hidden_size
-
-    if ckpt_path and os.path.exists(ckpt_path):
-        # all_latents already loaded from checkpoint
-        pass
     else:
         # Initialize all_latents only if not resuming
         all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
