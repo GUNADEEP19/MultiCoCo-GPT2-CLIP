@@ -296,6 +296,11 @@ def main():
 
         print(f"✅ Val loss {avg_vl:.4f} | Acc {acc:.2f}% | AvgTokens {avg_tk:.1f}")
 
+        # Append metrics to CSV after each epoch
+        with open(metrics_csv, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch+1, stage, avg_vl, acc, avg_tk])
+
         # Early stopping check
         if avg_vl < best_val:
             best_val = avg_vl
