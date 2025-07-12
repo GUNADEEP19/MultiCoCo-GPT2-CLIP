@@ -11,6 +11,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import copy
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
@@ -124,6 +125,8 @@ def main():
         ckpt = torch.load(ckpt_path, map_location=device)
 
         model.load_state_dict(ckpt["model"])
+        if "ema_model" in ckpt:
+            ema_model.load_state_dict(ckpt["ema_model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         scaler.load_state_dict(ckpt["scaler"])
         all_latents = ckpt["latents"].to(device).detach().requires_grad_(True)
@@ -153,7 +156,15 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
     scaler = GradScaler()
 
+    # Early stopping setup
+    patience = 8
     best_val = float("inf")
+    patience_counter = 0
+    
+    # Model EMA setup
+    ema_model = copy.deepcopy(model)
+    ema_decay = 0.999
+
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
 
     for epoch in range(start_epoch, configs.num_epochs):
@@ -212,6 +223,15 @@ def main():
             scaler.scale(loss_m).backward()
             scaler.step(optimizer)
             scaler.update()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # Update EMA model
+            with torch.no_grad():
+                for param, ema_param in zip(model.parameters(), ema_model.parameters()):
+                    ema_param.data = ema_decay * ema_param.data + (1 - ema_decay) * param.data
+            
             total_loss += loss_m.item()
 
             all_latents.requires_grad = True
@@ -263,20 +283,15 @@ def main():
 
         print(f"✅ Val loss {avg_vl:.4f} | Acc {acc:.2f}% | AvgTokens {avg_tk:.1f}")
 
-        ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
-        torch.save({
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scaler": scaler.state_dict(),
-            "latents": all_latents,
-            "epoch": epoch+1
-        }, ckpt)
-        wandb.save(ckpt)
+        # Early stopping check
         if avg_vl < best_val:
             best_val = avg_vl
+            patience_counter = 0
+            # Save best EMA model
             best_ckpt = os.path.join(save_dir, "best.pt")
             torch.save({
                 "model": model.state_dict(),
+                "ema_model": ema_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scaler": scaler.state_dict(),
                 "latents": all_latents,
@@ -284,6 +299,22 @@ def main():
             }, best_ckpt)
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
                 json.dump({"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}, f, indent=2)
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"🛑 Early stopping triggered! No improvement for {patience} epochs.")
+                break
+
+        ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
+        torch.save({
+            "model": model.state_dict(),
+            "ema_model": ema_model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scaler": scaler.state_dict(),
+            "latents": all_latents,
+            "epoch": epoch+1
+        }, ckpt)
+        wandb.save(ckpt)
         wandb_run.log({"train/avg_loss": avg_train, "val/loss": avg_vl, "val/acc": acc, "val/avg_tokens": avg_tk, "epoch": epoch+1})
 
         fig = plt.figure()
