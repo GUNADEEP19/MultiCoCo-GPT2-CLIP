@@ -117,8 +117,12 @@ def main():
     model = model.to(device)
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
 
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
+    # Remove DataParallel (not needed for Colab single A100 GPU)
+    # if torch.cuda.device_count() > 1:
+    #     model = torch.nn.DataParallel(model)
+
+    # Encourage user to increase batch size for A100
+    print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
 
     if ckpt_path and os.path.exists(ckpt_path):
         print(f"🔁 Resuming from checkpoint: {ckpt_path}")
@@ -173,7 +177,13 @@ def main():
         epoch_start = time.time()
 
         train_ds = get_cot_latent_dataset(train_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        loader = DataLoader(train_ds, batch_size=configs.batch_size_training, shuffle=True, collate_fn=collator)
+        loader = DataLoader(
+            train_ds,
+            batch_size=configs.batch_size_training,
+            shuffle=True,
+            collate_fn=collator,
+            pin_memory=True
+        )
 
         model.train()
         total_loss = 0.0
@@ -244,7 +254,13 @@ def main():
 
         model.eval()
         val_ds = get_cot_latent_dataset(val_data, stage, configs, START_ID, LATENT_ID, END_ID)
-        val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, collate_fn=collator)
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=1,
+            shuffle=False,
+            collate_fn=collator,
+            pin_memory=True
+        )
 
         vloss, correct, tot, tokens = 0.0, 0, 0, 0
         with torch.no_grad():
