@@ -95,10 +95,10 @@ class Coconut(nn.Module):
         # Stage-wise latent updates
         for pass_idx in range(max_n_latents):
             causallm_kwargs = dict(
-                inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
-                attention_mask=attention_mask[:, next_compute_range[0]:next_compute_range[1]],
-                output_hidden_states=True,
-            )
+                    inputs_embeds=inputs_embeds[:, next_compute_range[0]:next_compute_range[1], :],
+                    attention_mask=attention_mask[:, next_compute_range[0]:next_compute_range[1]],
+                    output_hidden_states=True,
+                )
             if position_ids is not None:
                 causallm_kwargs["position_ids"] = position_ids[:, next_compute_range[0]:next_compute_range[1]].to(device)
             if kv_cache is not None:
