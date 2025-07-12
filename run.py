@@ -269,6 +269,7 @@ def main():
                 if batch.get("position_ids") is not None:
                     batch["position_ids"] = batch["position_ids"].to(device)
                 out = model(
+                    input_ids=batch["input_ids"],
                     inputs_embeds=inputs_embeds,
                     attention_mask=batch["attention_mask"],
                     position_ids=batch.get("position_ids"),
