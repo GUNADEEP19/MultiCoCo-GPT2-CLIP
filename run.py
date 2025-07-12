@@ -67,6 +67,7 @@ def main():
         project=configs.project,
         name=configs.name,
         config=vars(configs),
+        resume=True,
         reinit=True
     )
 
@@ -119,7 +120,17 @@ def main():
         model = torch.nn.DataParallel(model)
 
     if ckpt_path and os.path.exists(ckpt_path):
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        print(f"🔁 Resuming from checkpoint: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device)
+
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        scaler.load_state_dict(ckpt["scaler"])
+        all_latents = ckpt["latents"].to(device).detach().requires_grad_(True)
+        start_epoch = ckpt["epoch"]
+    else:
+        # Initialize all_latents only if not resuming
+        all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
 
     # data
     train_data = get_dataset(configs.train_path)
@@ -130,7 +141,13 @@ def main():
     base_model = model.module.base_causallm if hasattr(model, "module") else model.base_causallm
     hidden_size = base_model.config.hidden_size
 
-    all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
+    if ckpt_path and os.path.exists(ckpt_path):
+        # all_latents already loaded from checkpoint
+        pass
+    else:
+        # Initialize all_latents only if not resuming
+        all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
+
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
@@ -247,12 +264,24 @@ def main():
         print(f"✅ Val loss {avg_vl:.4f} | Acc {acc:.2f}% | AvgTokens {avg_tk:.1f}")
 
         ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
-        torch.save(model.state_dict(), ckpt)
+        torch.save({
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scaler": scaler.state_dict(),
+            "latents": all_latents,
+            "epoch": epoch+1
+        }, ckpt)
         wandb.save(ckpt)
         if avg_vl < best_val:
             best_val = avg_vl
             best_ckpt = os.path.join(save_dir, "best.pt")
-            torch.save(model.state_dict(), best_ckpt)
+            torch.save({
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scaler": scaler.state_dict(),
+                "latents": all_latents,
+                "epoch": epoch+1
+            }, best_ckpt)
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
                 json.dump({"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}, f, indent=2)
         wandb_run.log({"train/avg_loss": avg_train, "val/loss": avg_vl, "val/acc": acc, "val/avg_tokens": avg_tk, "epoch": epoch+1})
