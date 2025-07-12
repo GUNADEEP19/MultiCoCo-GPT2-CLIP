@@ -81,6 +81,10 @@ def main():
 
     save_dir = os.path.join(configs.save_path, configs.name)
     os.makedirs(save_dir, exist_ok=True)
+
+    local_ckpt_dir = "/content/checkpoints"
+    os.makedirs(local_ckpt_dir, exist_ok=True)
+
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
