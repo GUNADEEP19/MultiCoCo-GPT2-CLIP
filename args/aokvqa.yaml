@@ -39,7 +39,7 @@ e_steps: 3                # Number of E-step optimization steps per batch
 # 🏋️ Training configs for Colab Free Tier
 num_epochs: 25
 batch_size_training: 32         # Increased for A100 GPU (was 8)
-gradient_accumulation_steps: 2 # Simulates effective batch size of 2
+gradient_accumulation_steps: 1 # No accumulation needed for A100, batch size 32
 lr: 5e-5
 weight_decay: 0.0
 
