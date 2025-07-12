@@ -173,6 +173,7 @@ def main():
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
 
     printed_checkpoint_reminder = False
+    prev_best_ckpt = None  # Track previous best checkpoint
     for epoch in range(start_epoch, configs.num_epochs):
         stage = epoch // configs.epochs_per_stage
         print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} ===")
@@ -311,6 +312,9 @@ def main():
 
         # After validation, save only best.pt to Drive and W&B
         if avg_vl < best_val:
+            # Delete previous best checkpoint if it exists
+            if prev_best_ckpt is not None and os.path.exists(prev_best_ckpt):
+                os.remove(prev_best_ckpt)
             best_val = avg_vl
             patience_counter = 0
             # Save best EMA model to Drive with informative filename
@@ -327,6 +331,7 @@ def main():
             wandb.save(best_ckpt, base_path=save_dir)
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
                 json.dump({"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}, f, indent=2)
+            prev_best_ckpt = best_ckpt  # Update tracker
         else:
             patience_counter += 1
             if patience_counter >= patience:
