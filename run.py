@@ -301,11 +301,11 @@ def main():
             writer = csv.writer(f)
             writer.writerow([epoch+1, stage, avg_vl, acc, avg_tk])
 
-        # Early stopping check
+        # After validation, save only best.pt to Drive, regular checkpoints to local
         if avg_vl < best_val:
             best_val = avg_vl
             patience_counter = 0
-            # Save best EMA model
+            # Save best EMA model to Drive
             best_ckpt = os.path.join(save_dir, "best.pt")
             torch.save({
                 "model": model.state_dict(),
@@ -323,6 +323,7 @@ def main():
                 print(f"🛑 Early stopping triggered! No improvement for {patience} epochs.")
                 break
 
+        # Save regular checkpoint to local Colab storage only
         ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
         torch.save({
             "model": model.state_dict(),
@@ -332,8 +333,11 @@ def main():
             "latents": all_latents,
             "epoch": epoch+1
         }, ckpt)
-        wandb.save(ckpt)
-        wandb_run.log({"train/avg_loss": avg_train, "val/loss": avg_vl, "val/acc": acc, "val/avg_tokens": avg_tk, "epoch": epoch+1})
+        wandb.save(ckpt, base_path=save_dir)
+
+        # After saving the regular checkpoint, print a reminder for the user
+        print(f"[INFO] To keep a specific checkpoint (e.g., checkpoint_10.pt), copy it to Drive before your Colab session ends:")
+        print(f"!cp /content/checkpoints/checkpoint_10.pt {save_dir}/")
 
         fig = plt.figure()
         plt.plot(train_losses, label="train")
