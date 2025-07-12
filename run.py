@@ -87,7 +87,7 @@ def main():
     if not os.path.exists(metrics_csv):
         with open(metrics_csv, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "stage", "val_loss", "val_acc", "avg_tokens"])
+            writer.writerow(["epoch", "stage", "train_loss", "val_loss", "val_acc", "avg_tokens"])
 
     # model & tokenizer
     hf_model = AutoModelForCausalLM.from_pretrained(configs.model_id)
@@ -299,14 +299,15 @@ def main():
         # Append metrics to CSV after each epoch
         with open(metrics_csv, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([epoch+1, stage, avg_vl, acc, avg_tk])
+            writer.writerow([epoch+1, stage, avg_train, avg_vl, acc, avg_tk])
 
         # After validation, save only best.pt to Drive, regular checkpoints to local
         if avg_vl < best_val:
             best_val = avg_vl
             patience_counter = 0
-            # Save best EMA model to Drive
-            best_ckpt = os.path.join(save_dir, "best.pt")
+            # Save best EMA model to Drive with informative filename
+            best_ckpt_name = f"best_epoch{epoch+1}_valloss{avg_vl:.4f}.pt"
+            best_ckpt = os.path.join(save_dir, best_ckpt_name)
             torch.save({
                 "model": model.state_dict(),
                 "ema_model": ema_model.state_dict(),
@@ -323,8 +324,9 @@ def main():
                 print(f"🛑 Early stopping triggered! No improvement for {patience} epochs.")
                 break
 
-        # Save regular checkpoint to local Colab storage only
-        ckpt = os.path.join(save_dir, f"checkpoint_{epoch+1}.pt")
+        # Save regular checkpoint to local Colab storage only with informative filename
+        ckpt_name = f"checkpoint_epoch{epoch+1}_valloss{avg_vl:.4f}.pt"
+        ckpt = os.path.join(save_dir, ckpt_name)
         torch.save({
             "model": model.state_dict(),
             "ema_model": ema_model.state_dict(),
@@ -336,17 +338,18 @@ def main():
         wandb.save(ckpt, base_path=save_dir)
 
         # After saving the regular checkpoint, print a reminder for the user
-        print(f"[INFO] To keep a specific checkpoint (e.g., checkpoint_10.pt), copy it to Drive before your Colab session ends:")
-        print(f"!cp /content/checkpoints/checkpoint_10.pt {save_dir}/")
+        print(f"[INFO] To keep a specific checkpoint (e.g., {ckpt_name}), copy it to Drive before your Colab session ends:")
+        print(f"!cp /content/checkpoints/{ckpt_name} {save_dir}/")
 
         fig = plt.figure()
         plt.plot(train_losses, label="train")
         plt.plot(val_losses, label="val")
         plt.title(f"Epoch {epoch+1}")
         plt.legend()
-        fpath = os.path.join(save_dir, f"loss_{epoch+1}.png")
-        fig.savefig(fpath)
-        wandb.log({f"loss_plot_{epoch+1}": wandb.Image(fpath)})
+        # Remove saving to Drive
+        # fpath = os.path.join(save_dir, f"loss_{epoch+1}.png")
+        # fig.savefig(fpath)
+        wandb.log({f"loss_plot_{epoch+1}": wandb.Image(fig)})
         plt.close(fig)
         print(f"⏱ Epoch time: {(time.time() - epoch_start)/60:.2f} mins")
 
