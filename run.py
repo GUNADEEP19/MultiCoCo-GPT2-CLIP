@@ -40,11 +40,12 @@ def inject_latents(batch, Z, model, latent_token_id):
     if torch.any(num_latents == 0):
         return token_embeddings
 
-    flat_mask = latent_mask.view(B * L)
-    flat_embeds = token_embeddings.view(B * L, H)
-    actual = Z[:, :num_latents[0], :]
-    flat_embeds[flat_mask] = actual.reshape(-1, H)
-    return flat_embeds.view(B, L, H)
+    # Inject latents per sample to avoid shape mismatch
+    for b in range(B):
+        n_latent = num_latents[b].item()
+        if n_latent > 0:
+            token_embeddings[b][latent_mask[b]] = Z[b, :n_latent, :]
+    return token_embeddings
 
 def main():
     parser = argparse.ArgumentParser()
