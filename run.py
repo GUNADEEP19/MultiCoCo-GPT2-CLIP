@@ -79,7 +79,8 @@ def main():
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    save_dir = os.path.join(configs.save_path, configs.name)
+    # Set save directory to your specific Google Drive location
+    save_dir = "/content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gunadeep"
     os.makedirs(save_dir, exist_ok=True)
 
     local_ckpt_dir = "/content/checkpoints"
