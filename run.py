@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import torch.optim as optim
 from torch.utils.data import DataLoader
 # Change tqdm import for Colab-friendly progress bars
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import copy
 
