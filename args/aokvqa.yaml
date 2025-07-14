@@ -22,15 +22,17 @@ uniform_prob: 0.1
 
 # 🧠 Latent-space configs (REQUIRED for EM-style training)
 latent_dim: 768           # GPT-2 base hidden size
-n_latents: 4              # Number of latent tokens per sample
+# n_latents: 4              # Number of latent tokens per sample
 latent_lr: 1e-3           # Learning rate for latent vectors (E-step)
 e_steps: 3                # Number of E-step optimization steps per batch
 
 # 🏋️ Training configs for Colab Free Tier
-num_epochs: 40
+num_epochs: 28
 batch_size_training: 48         # Increased for A100 GPU (was 8)
 gradient_accumulation_steps: 1 # No accumulation needed for A100, batch size 32
 lr: 1e-4
 weight_decay: 0.0
 
 max_length: 512  # Optimal for A-OKVQA, fits all data, saves memory
+max_latent_stage: 7           # Curriculum: number of latent stages
+epochs_per_stage: 4           # Curriculum: epochs per stage

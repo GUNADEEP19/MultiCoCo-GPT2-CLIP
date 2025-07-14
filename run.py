@@ -127,11 +127,17 @@ def main():
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
     printed_checkpoint_reminder = False
     prev_best_ckpt = None
+    # Curriculum learning setup
+    max_latent_stage = getattr(configs, "max_latent_stage", 7)
+    epochs_per_stage = getattr(configs, "epochs_per_stage", 4)
     for epoch in range(start_epoch, configs.num_epochs):
-        stage = epoch // configs.epochs_per_stage
-        print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} ===")
+        stage = min(epoch // epochs_per_stage, max_latent_stage-1)
+        n_latents = stage + 1
+        print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} | n_latents {n_latents} ===")
         epoch_start = time.time()
 
+        # Update configs for this stage
+        configs.n_latents = n_latents
         train_ds = get_cot_latent_dataset(train_data, stage, configs,
                                           processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
                                           processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
@@ -220,9 +226,8 @@ def main():
         tsne_labels = []
         gen_token_counts = []
         sample_preds = []
-        # Select 3-5 fixed validation samples for latent trajectory tracking
-        # Hardcode your chosen validation indices here (replace with your own)
-        fixed_traj_indices = [12, 45, 78]  # <-- Replace with your chosen indices
+        # Select 4 fixed validation samples for latent trajectory tracking
+        fixed_traj_indices = [12, 45, 78, 101]  # <-- Use 4 chosen indices
         if epoch == 0:
             wandb.config.update({"latent_traj_indices": fixed_traj_indices}, allow_val_change=True)
         else:
@@ -417,8 +422,8 @@ def main():
             for row in sample_preds:
                 table.add_data(row["question"], row["ground_truth"], row["prediction"], row["image_path"], row["mean_latent"])
             wandb.log({"sample_predictions": table})
-        # At every 5th epoch, plot latent trajectories for tracked samples
-        if (epoch+1) % 5 == 0 and len(latent_traj_dict) > 0:
+        # At the END of each stage, plot latent trajectories for tracked samples
+        if (epoch + 1) % epochs_per_stage == 0 and len(latent_traj_dict) > 0:
             # Stack all mean latents for all tracked samples
             all_latents = []
             sample_ids = []
