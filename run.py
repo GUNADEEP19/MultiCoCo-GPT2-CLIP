@@ -165,7 +165,14 @@ def main():
     collator = MyCollator(processor, label_pad_token_id=-100)
 
     n_train = len(train_data)
-    hidden_size = model.base_causallm.config.hidden_size
+    # Handle different config structures in transformers 4.37.2
+    try:
+        hidden_size = model.base_causallm.config.hidden_size
+    except AttributeError:
+        try:
+            hidden_size = model.base_causallm.config.text_config.hidden_size
+        except AttributeError:
+            hidden_size = 4096  # Default for LLaVA-1.5-7B
 
     # Checkpoint handling
     start_epoch = configs.resume

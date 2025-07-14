@@ -65,7 +65,15 @@ def test_model_loading():
         )
         print(f"✅ Basic model loaded successfully")
         print(f"   Model type: {type(model)}")
-        print(f"   Hidden size: {model.config.hidden_size}")
+        # Handle different config structures in transformers 4.37.2
+        try:
+            hidden_size = model.config.hidden_size
+        except AttributeError:
+            try:
+                hidden_size = model.config.text_config.hidden_size
+            except AttributeError:
+                hidden_size = "unknown"
+        print(f"   Hidden size: {hidden_size}")
         print(f"   Parameters: {sum(p.numel() for p in model.parameters()):,}")
         
         # Test 3: Add special tokens
