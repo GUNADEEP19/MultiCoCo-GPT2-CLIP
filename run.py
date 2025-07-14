@@ -415,7 +415,6 @@ def main():
         # Log sample predictions to W&B as a table (Coconut only)
         # Note: Reasoning steps are not logged for COCONUT, since the model reasons in latent space, not explicit text.
         if len(sample_preds) > 0:
-            import wandb
             columns = ["question", "ground_truth", "prediction", "image_path", "mean_latent"]
             table = wandb.Table(columns=columns)
             for row in sample_preds:
