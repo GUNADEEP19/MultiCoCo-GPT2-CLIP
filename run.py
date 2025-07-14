@@ -155,7 +155,7 @@ def main():
 
         model.train()
         total_loss = 0.0
-        pbar = tqdm(loader, desc="Training", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
+        pbar = tqdm(loader, desc="Training", leave=False, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
 
         for batch in pbar:
             for k in batch:
@@ -238,7 +238,7 @@ def main():
             fixed_traj_indices = wandb.config.get("latent_traj_indices", [])
         latent_traj_dict = getattr(main, "latent_traj_dict", {}) if hasattr(main, "latent_traj_dict") else {i: [] for i in fixed_traj_indices}
         with torch.no_grad():
-            vbar = tqdm(val_loader, desc="Validating", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
+            vbar = tqdm(val_loader, desc="Validating", leave=False, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
             for batch in vbar:
                 for k in batch:
                     if isinstance(batch[k], torch.Tensor):
