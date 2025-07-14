@@ -2,7 +2,6 @@ import json
 import random
 import torch
 from torch.utils.data import Dataset
-from transformers import LlavaProcessor
 import itertools
 from PIL import Image  # <-- Add this import
 import os
