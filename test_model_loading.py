@@ -5,7 +5,7 @@ Run this before starting the full training to catch any issues early.
 """
 
 import torch
-from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig, AutoTokenizer
+from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig, AutoTokenizer, LlamaTokenizer
 
 def test_model_loading():
     """Test loading the LLaVA model with different configurations."""
@@ -20,18 +20,28 @@ def test_model_loading():
         # Test 1: Basic processor loading
         print("\n1️⃣ Testing processor loading...")
         try:
-            processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True)
+            # Try loading with use_fast=False to avoid fast tokenizer issues
+            processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True, use_fast=False)
             tokenizer = processor.tokenizer
             print(f"✅ Processor loaded successfully")
             print(f"   Tokenizer vocab size: {len(tokenizer)}")
         except Exception as e:
             print(f"⚠️  Standard loading failed: {e}")
             print("🔄 Trying alternative loading method...")
-            from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-            processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True)
-            print(f"✅ Alternative loading successful")
-            print(f"   Tokenizer vocab size: {len(tokenizer)}")
+            try:
+                from transformers import AutoTokenizer
+                tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True, use_fast=False)
+                processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True, use_fast=False)
+                print(f"✅ Alternative loading successful")
+                print(f"   Tokenizer vocab size: {len(tokenizer)}")
+            except Exception as e2:
+                print(f"⚠️  Alternative loading failed: {e2}")
+                print("🔄 Trying final fallback method...")
+                from transformers import LlamaTokenizer
+                tokenizer = LlamaTokenizer.from_pretrained(model_id, use_fast=False)
+                processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True, use_fast=False)
+                print(f"✅ Final fallback loading successful")
+                print(f"   Tokenizer vocab size: {len(tokenizer)}")
         
         # Test 2: Basic model loading (CPU for testing)
         print("\n2️⃣ Testing basic model loading...")
