@@ -16,18 +16,9 @@ save_only_improve: true
 train_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_train.json
 val_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
 
-# ⛓️ Reasoning setup
-debug: false
-no_thoughts: false
-cot: false
-no_cot: false
-coconut: true
-
 # 🧠 Curriculum configs
 c_thought: 1             # Try 1 for fewer latent tokens per step
-max_latent_stage: 2      # Try 2 or 4 for easier start
 epochs_per_stage: 4      # More epochs per stage for slower curriculum
-pad_latent_to_max: true
 uniform_prob: 0.1
 
 # 🧠 Latent-space configs (REQUIRED for EM-style training)
@@ -40,7 +31,7 @@ e_steps: 3                # Number of E-step optimization steps per batch
 num_epochs: 40
 batch_size_training: 32         # Increased for A100 GPU (was 8)
 gradient_accumulation_steps: 1 # No accumulation needed for A100, batch size 32
-lr: 1e-4
+lr: 2e-4
 weight_decay: 0.0
 
 max_length: 512  # Optimal for A-OKVQA, fits all data, saves memory

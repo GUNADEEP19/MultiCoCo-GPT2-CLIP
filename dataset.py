@@ -26,7 +26,6 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
                            no_special_marker=False, shuffle=False):
     processor = LlavaProcessor.from_pretrained(configs.model_id)
     c_thought        = configs.c_thought
-    max_latent_stage = configs.max_latent_stage
     uniform_prob     = configs.uniform_prob
     max_len          = getattr(configs, "max_length", 1024)
 
@@ -35,10 +34,11 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
         def __getitem__(self, idx):
             ex = base_dataset[idx]
             if random.random() < uniform_prob:
-                k = random.randint(0, len(ex["steps"]))
+                total_steps = len(ex["steps"]) if ex["steps"] is not None else 0
+                k = random.randint(0, total_steps)
             else:
-                k = scheduled_stage
-            k = min(k, max_latent_stage)
+                total_steps = len(ex["steps"]) if ex["steps"] is not None else 0
+                k = min(scheduled_stage, total_steps)
             n_latent = k * c_thought
             q = ex["question"]
             s = ex["steps"]
@@ -101,49 +101,6 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
         perm = torch.randperm(len(ds)).tolist()
         return torch.utils.data.Subset(ds, perm)
     return ds
-
-def get_question_latent_dataset(scheduled_stage, base_dataset, configs,
-                                start_id, latent_id, end_id,
-                                no_special_marker=False):
-    tokenizer = GPT2Tokenizer.from_pretrained(configs.model_id)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    c_thought        = configs.c_thought
-    max_latent_stage = configs.max_latent_stage
-    pad_to_max       = configs.pad_latent_to_max
-    max_len          = getattr(configs, "max_length", 1024)
-
-    class LatentOnly(Dataset):
-        def __len__(self): return len(base_dataset)
-        def __getitem__(self, idx):
-            ex = base_dataset[idx]
-            q_tokens = tokenizer.encode(ex["question"], add_special_tokens=True)
-            k = scheduled_stage
-            if pad_to_max:
-                k = max_latent_stage
-            else:
-                k = min(k, len(ex["steps"]))
-            n_latent = k * c_thought
-
-            tokens = q_tokens.copy()
-            if not no_special_marker:
-                tokens.append(start_id)
-            tokens.extend([latent_id] * n_latent)
-            if not no_special_marker:
-                tokens.append(end_id)
-
-            tokens = tokens[:max_len]
-            attention_mask = [1] * len(tokens)
-            position_ids = [min(i, 1023) for i in range(len(tokens))]
-
-            return {
-                "input_ids":      torch.tensor(tokens, dtype=torch.long),
-                "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
-                "position_ids":   torch.tensor(position_ids, dtype=torch.long),
-                "idx":            idx
-            }
-
-    return LatentOnly()
 
 class MyCollator:
     def __init__(self, processor, label_pad_token_id=-100):
