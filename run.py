@@ -95,6 +95,7 @@ def main():
                     'image_processor': type('ImageProcessor', (), {
                         '__call__': lambda self, img, **kwargs: {'pixel_values': torch.randn(1, 3, 224, 224) if img is not None else None}
                     })(),
+                    'apply_chat_template': staticmethod(lambda conversation, add_generation_prompt=True: conversation[0]["content"][1]["text"]),
                     '__call__': lambda self, text=None, images=None, return_tensors=None, padding=None, max_length=None, **kwargs: {
                         'input_ids': tokenizer(text, return_tensors=return_tensors, padding=padding or 'do_not_pad', max_length=max_length, **kwargs)['input_ids'],
                         'attention_mask': tokenizer(text, return_tensors=return_tensors, padding=padding or 'do_not_pad', max_length=max_length, **kwargs)['attention_mask'],
