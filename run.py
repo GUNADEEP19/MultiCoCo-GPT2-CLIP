@@ -18,7 +18,7 @@ from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
 from torch.cuda.amp import autocast, GradScaler
-from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig
+from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig, AutoTokenizer
 
 def decode_preds(pred_ids, processor):
     if pred_ids.ndim == 2:
@@ -66,9 +66,24 @@ def main():
     
     print(f"🔄 Loading model from {configs.model_id}...")
     
-    # Load processor and tokenizer directly
-    processor = LlavaProcessor.from_pretrained(configs.model_id)
-    tokenizer = processor.tokenizer
+    # Load processor and tokenizer with fallback options
+    try:
+        print("📝 Loading processor...")
+        processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True)
+        tokenizer = processor.tokenizer
+        print("✅ Processor loaded successfully")
+    except Exception as e:
+        print(f"⚠️  Processor loading failed: {e}")
+        print("🔄 Trying alternative loading method...")
+        try:
+            # Try loading tokenizer separately
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(configs.model_id, trust_remote_code=True)
+            processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True)
+            print("✅ Alternative loading successful")
+        except Exception as e2:
+            print(f"❌ Alternative loading also failed: {e2}")
+            raise e2
     
     # Load model with proper configuration
     model_kwargs = {
@@ -93,6 +108,7 @@ def main():
     
     llava_model = LlavaForConditionalGeneration.from_pretrained(
         configs.model_id,
+        trust_remote_code=True,
         **model_kwargs
     )
     special_tokens_dict = {

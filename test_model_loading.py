@@ -5,7 +5,7 @@ Run this before starting the full training to catch any issues early.
 """
 
 import torch
-from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig
+from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig, AutoTokenizer
 
 def test_model_loading():
     """Test loading the LLaVA model with different configurations."""
@@ -19,15 +19,25 @@ def test_model_loading():
     try:
         # Test 1: Basic processor loading
         print("\n1️⃣ Testing processor loading...")
-        processor = LlavaProcessor.from_pretrained(model_id)
-        tokenizer = processor.tokenizer
-        print(f"✅ Processor loaded successfully")
-        print(f"   Tokenizer vocab size: {len(tokenizer)}")
+        try:
+            processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True)
+            tokenizer = processor.tokenizer
+            print(f"✅ Processor loaded successfully")
+            print(f"   Tokenizer vocab size: {len(tokenizer)}")
+        except Exception as e:
+            print(f"⚠️  Standard loading failed: {e}")
+            print("🔄 Trying alternative loading method...")
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            processor = LlavaProcessor.from_pretrained(model_id, trust_remote_code=True)
+            print(f"✅ Alternative loading successful")
+            print(f"   Tokenizer vocab size: {len(tokenizer)}")
         
         # Test 2: Basic model loading (CPU for testing)
         print("\n2️⃣ Testing basic model loading...")
         model = LlavaForConditionalGeneration.from_pretrained(
             model_id,
+            trust_remote_code=True,
             torch_dtype=torch.float16,
             low_cpu_mem_usage=True,
             device_map="auto"
@@ -99,6 +109,7 @@ def test_optimization_options():
             
             model = LlavaForConditionalGeneration.from_pretrained(
                 model_id,
+                trust_remote_code=True,
                 quantization_config=quantization_config,
                 device_map="auto"
             )
@@ -112,6 +123,7 @@ def test_optimization_options():
             print("\n   Testing Flash Attention 2...")
             model = LlavaForConditionalGeneration.from_pretrained(
                 model_id,
+                trust_remote_code=True,
                 use_flash_attention_2=True,
                 torch_dtype=torch.float16,
                 device_map="auto"
