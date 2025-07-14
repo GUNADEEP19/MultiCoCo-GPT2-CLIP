@@ -18,7 +18,7 @@ from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
 from torch.cuda.amp import autocast, GradScaler
-from llava.model.builder import load_pretrained_model
+from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig
 
 def decode_preds(pred_ids, processor):
     if pred_ids.ndim == 2:
@@ -60,14 +60,40 @@ def main():
     local_ckpt_dir = "/content/checkpoints"
     os.makedirs(local_ckpt_dir, exist_ok=True)
 
-    # model & processor
-    tokenizer, llava_model, processor = load_pretrained_model(
-        model_path=configs.model_id,  # now uses the repo id
-        model_base=None,
-        model_name=configs.model_id,  # now uses the repo id
-        load_8bit=False,
-        load_4bit=False,
-        device_map="auto"
+    # model & processor - Use direct transformers loading for better compatibility
+    load_4bit = getattr(configs, "load_4bit", False)
+    use_flash_attention_2 = getattr(configs, "use_flash_attention_2", False)
+    
+    print(f"🔄 Loading model from {configs.model_id}...")
+    
+    # Load processor and tokenizer directly
+    processor = LlavaProcessor.from_pretrained(configs.model_id)
+    tokenizer = processor.tokenizer
+    
+    # Load model with proper configuration
+    model_kwargs = {
+        "torch_dtype": torch.bfloat16 if getattr(configs, "bf16", False) else torch.float16,
+        "low_cpu_mem_usage": True,
+        "device_map": "auto"
+    }
+    
+    if load_4bit:
+        print("🔧 Loading model in 4-bit precision...")
+        model_kwargs["load_in_4bit"] = True
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4"
+        )
+    
+    if use_flash_attention_2:
+        print("🚀 Enabling Flash Attention 2...")
+        model_kwargs["use_flash_attention_2"] = True
+    
+    llava_model = LlavaForConditionalGeneration.from_pretrained(
+        configs.model_id,
+        **model_kwargs
     )
     special_tokens_dict = {
         "additional_special_tokens": ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
@@ -103,6 +129,17 @@ def main():
 
     n_train = len(train_data)
     hidden_size = model.base_causallm.config.hidden_size
+
+    # Checkpoint handling
+    start_epoch = configs.resume
+    ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
+
+    # Initialize metrics CSV
+    metrics_csv = os.path.join(save_dir, "metrics.csv")
+    if not os.path.exists(metrics_csv):
+        with open(metrics_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["epoch", "stage", "train_loss", "val_loss", "val_acc", "avg_tokens"])
 
     if ckpt_path and os.path.exists(ckpt_path):
         print(f"🔁 Resuming from checkpoint: {ckpt_path}")
@@ -415,7 +452,7 @@ def main():
             for row in sample_preds:
                 table.add_data(row["question"], row["ground_truth"], row["prediction"], row["image_path"], row["mean_latent"])
             wandb.log({"sample_predictions": table})
-        # At the END of each stage, plot latent trajectories for tracked samples
+        # At the END of each stage, plot latent trajectories for tracked samples (using t-SNE instead of UMAP)
         if (epoch + 1) % epochs_per_stage == 0 and len(latent_traj_dict) > 0:
             # Stack all mean latents for all tracked samples
             all_latents = []
@@ -424,20 +461,24 @@ def main():
                 all_latents.extend(traj)
                 sample_ids.extend([idx]*len(traj))
             if len(all_latents) > 0:
-                reducer = umap.UMAP(n_components=2, random_state=42)
-                umap_proj = reducer.fit_transform(np.stack(all_latents))
-                fig_traj, ax_traj = plt.subplots(figsize=(7, 6))
-                color_map = plt.cm.get_cmap('tab10', len(latent_traj_dict))
-                offset = 0
-                for i, idx in enumerate(latent_traj_dict):
-                    n_points = len(latent_traj_dict[idx])
-                    if n_points > 1:
-                        ax_traj.plot(umap_proj[offset:offset+n_points, 0], umap_proj[offset:offset+n_points, 1], marker='o', label=f'Sample {idx}', color=color_map(i))
-                    offset += n_points
-                ax_traj.set_title(f"Latent Trajectories (Epoch {epoch+1})")
-                ax_traj.legend()
-                wandb.log({"latent_trajectories": wandb.Image(fig_traj)})
-                plt.close(fig_traj)
+                try:
+                    # Use t-SNE for dimensionality reduction (no additional dependencies needed)
+                    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(all_latents)-1))
+                    tsne_proj = tsne.fit_transform(np.stack(all_latents))
+                    fig_traj, ax_traj = plt.subplots(figsize=(7, 6))
+                    color_map = plt.cm.get_cmap('tab10', len(latent_traj_dict))
+                    offset = 0
+                    for i, idx in enumerate(latent_traj_dict):
+                        n_points = len(latent_traj_dict[idx])
+                        if n_points > 1:
+                            ax_traj.plot(tsne_proj[offset:offset+n_points, 0], tsne_proj[offset:offset+n_points, 1], marker='o', label=f'Sample {idx}', color=color_map(i))
+                        offset += n_points
+                    ax_traj.set_title(f"Latent Trajectories (Epoch {epoch+1}) - t-SNE")
+                    ax_traj.legend()
+                    wandb.log({"latent_trajectories": wandb.Image(fig_traj)})
+                    plt.close(fig_traj)
+                except Exception as e:
+                    print(f"[WARNING] Could not create latent trajectory plot: {e}")
             # Save for next epoch
             main.latent_traj_dict = latent_traj_dict
     wandb_run.finish()
