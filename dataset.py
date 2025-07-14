@@ -84,6 +84,10 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             label_offset = (input_ids == processor.tokenizer.convert_tokens_to_ids("<|latent|>")).nonzero(as_tuple=True)[0].max().item() + 1 if n_latent > 0 else len(q)
             labels = input_ids.clone()
             labels[:label_offset] = -100
+            # Also mask <|end-latent|> token(s)
+            end_latent_id = processor.tokenizer.convert_tokens_to_ids("<|end-latent|>")
+            end_latent_positions = (input_ids == end_latent_id).nonzero(as_tuple=True)[0]
+            labels[end_latent_positions] = -100
             return {
                 "input_ids":      input_ids,
                 "attention_mask": attention_mask,
