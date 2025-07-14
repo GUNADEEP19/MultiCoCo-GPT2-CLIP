@@ -33,6 +33,7 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
         def __len__(self): return len(base_dataset)
         def __getitem__(self, idx):
             ex = base_dataset[idx]
+            total_steps = len(ex["steps"]) if ex.get("steps") else 0
             n_latent = min(getattr(configs, "n_latents", 10), total_steps)
             remaining_steps = ex["steps"][n_latent:] if total_steps > n_latent else []
             q = ex["question"]
@@ -43,9 +44,9 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             if not no_special_marker:
                 question_with_latents += " <|start-latent|>"
             question_with_latents += " " + "<|latent|> " * n_latent
-            # Add unused latent slots if total_steps < configs.n_latents
-            if n_latent < getattr(configs, "n_latents", 10):
-                question_with_latents += "<|latent|> " * (getattr(configs, "n_latents", 10) - n_latent)
+            max_latents = getattr(configs, "n_latents", 10)
+            if n_latent < max_latents:
+                question_with_latents += "<|latent|> " * (max_latents - n_latent)
             if not no_special_marker:
                 question_with_latents += "<|end-latent|> "
             question_with_latents += " " + " ".join(remaining_steps)
