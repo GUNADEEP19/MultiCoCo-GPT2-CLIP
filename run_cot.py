@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
-from llava_hf import LlavaForCausalLM, LlavaProcessor
+from transformers import LlavaForCausalLM, LlavaProcessor
 import copy
 from PIL import Image
 

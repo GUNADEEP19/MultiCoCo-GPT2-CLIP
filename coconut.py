@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 from collections import namedtuple
 # LLaVA imports
-from llava_hf import LlavaForCausalLM, LlavaProcessor
+from transformers import LlavaForCausalLM, LlavaProcessor
 
 # Suppress specific warnings
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
