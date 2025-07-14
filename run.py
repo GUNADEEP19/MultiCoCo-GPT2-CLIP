@@ -21,6 +21,7 @@ from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
 from torch.amp import autocast, GradScaler
+from llava.model.builder import load_pretrained_model
 
 def decode_preds(pred_ids, processor):
     if pred_ids.ndim == 2:
@@ -75,21 +76,30 @@ def main():
             writer.writerow(["epoch", "stage", "train_loss", "val_loss", "val_acc", "avg_tokens"])
 
     # model & processor
-    processor = LlavaProcessor.from_pretrained(configs.model_id)
-    tokenizer = processor.tokenizer
+    tokenizer, llava_model, processor = load_pretrained_model(
+        model_path=configs.model_id,
+        model_base=None,
+        model_name=configs.model_id,
+        load_8bit=False,
+        load_4bit=False,
+        device_map="auto"
+    )
     special_tokens_dict = {
         "additional_special_tokens": ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     }
     tokenizer.add_special_tokens(special_tokens_dict)
+    llava_model.resize_token_embeddings(len(tokenizer))
     model = Coconut(
-        model_id=configs.model_id,
+        model_id=None,  # not used anymore
         latent_token_id=tokenizer.convert_tokens_to_ids("<|latent|>"),
         start_latent_id=tokenizer.convert_tokens_to_ids("<|start-latent|>"),
         end_latent_id=tokenizer.convert_tokens_to_ids("<|end-latent|>"),
         eos_token_id=tokenizer.eos_token_id
     )
     model = model.to(device)
-    model.base_causallm.resize_token_embeddings(len(tokenizer))
+    model.processor = processor
+    model.base_causallm = llava_model
+    model.embedding = llava_model.get_input_embeddings()
 
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
     print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")

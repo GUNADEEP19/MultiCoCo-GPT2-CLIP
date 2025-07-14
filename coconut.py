@@ -19,7 +19,7 @@ class Coconut(nn.Module):
     # NOTE: The tokenizer should have special latent tokens added and the model's embeddings resized before training.
     def __init__(
         self,
-        model_id="llava-hf/llava-1.5-7b-hf",
+        model_id=None,  # not used anymore
         latent_token_id=None,
         start_latent_id=None,
         end_latent_id=None,
@@ -27,13 +27,13 @@ class Coconut(nn.Module):
     ):
         super().__init__()
         self.gen_forward_cnt = 0
-        self.processor = LlavaProcessor.from_pretrained(model_id)
-        self.base_causallm = LlavaForCausalLM.from_pretrained(model_id)
+        self.processor = None  # will be set externally
+        self.base_causallm = None  # will be set externally
         self.latent_token_id = latent_token_id
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
         self.eos_token_id = eos_token_id
-        self.embedding = self.base_causallm.get_input_embeddings()
+        self.embedding = None  # will be set externally
 
     def inject_latents(self, input_ids, latents):
         """
