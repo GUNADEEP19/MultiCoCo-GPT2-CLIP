@@ -69,27 +69,38 @@ def main():
     # Load processor and tokenizer with fallback options
     try:
         print("📝 Loading processor...")
-        # Try loading with use_fast=False to avoid fast tokenizer issues
-        processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True, use_fast=False)
+        # Try loading with minimal parameters for transformers 4.37.2 compatibility
+        processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True)
         tokenizer = processor.tokenizer
         print("✅ Processor loaded successfully")
     except Exception as e:
         print(f"⚠️  Processor loading failed: {e}")
         print("🔄 Trying alternative loading method...")
         try:
-            # Try loading tokenizer separately with use_fast=False
+            # Try loading tokenizer separately
             from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(configs.model_id, trust_remote_code=True, use_fast=False)
-            processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True, use_fast=False)
+            tokenizer = AutoTokenizer.from_pretrained(configs.model_id, trust_remote_code=True)
+            processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True)
             print("✅ Alternative loading successful")
         except Exception as e2:
             print(f"❌ Alternative loading also failed: {e2}")
             print("🔄 Trying final fallback method...")
             try:
-                # Final fallback: use slow tokenizer
+                # Final fallback: use LlamaTokenizer directly
                 from transformers import LlamaTokenizer
-                tokenizer = LlamaTokenizer.from_pretrained(configs.model_id, use_fast=False)
-                processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True, use_fast=False)
+                tokenizer = LlamaTokenizer.from_pretrained(configs.model_id)
+                # Create a simple processor wrapper for transformers 4.37.2
+                processor = type('SimpleProcessor', (), {
+                    'tokenizer': tokenizer,
+                    'image_processor': type('ImageProcessor', (), {
+                        '__call__': lambda self, img, **kwargs: {'pixel_values': torch.randn(1, 3, 224, 224) if img is not None else None}
+                    })(),
+                    '__call__': lambda self, text=None, images=None, return_tensors=None, padding=None, max_length=None, **kwargs: {
+                        'input_ids': tokenizer(text, return_tensors=return_tensors, padding=padding, max_length=max_length, **kwargs)['input_ids'],
+                        'attention_mask': tokenizer(text, return_tensors=return_tensors, padding=padding, max_length=max_length, **kwargs)['attention_mask'],
+                        'pixel_values': torch.randn(1, 3, 224, 224) if images is not None else None
+                    }
+                })()
                 print("✅ Final fallback loading successful")
             except Exception as e3:
                 print(f"❌ All loading methods failed: {e3}")

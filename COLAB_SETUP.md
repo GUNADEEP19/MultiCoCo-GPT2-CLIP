@@ -12,14 +12,16 @@ This guide helps you set up and run COCONUT training on LLaVA-1.5-7B in Google C
 
 ### Install Dependencies
 ```python
-# Install required packages
-!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-!pip install transformers>=4.35.3
+# Install required packages (matching your versions)
+!pip install torch==2.1.2+cu121 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+!pip install transformers==4.37.2
 !pip install accelerate
-!pip install wandb
+!pip install wandb==0.21.0
 !pip install tqdm
-!pip install matplotlib
-!pip install scikit-learn
+!pip install matplotlib==3.10.3
+!pip install scikit-learn==1.2.2
+!pip install Pillow==10.4.0
+!pip install PyYAML==6.0.2
 
 # Optional optimizations (uncomment if needed)
 # !pip install bitsandbytes  # For 4-bit quantization

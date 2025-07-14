@@ -53,12 +53,11 @@ def test_fixed_loading():
         
         model_id = "llava-hf/llava-1.5-7b-hf"
         
-        # Try the fixed loading method
-        print("📝 Testing with use_fast=False...")
+        # Try the fixed loading method for transformers 4.37.2
+        print("📝 Testing with minimal parameters...")
         processor = LlavaProcessor.from_pretrained(
             model_id, 
-            trust_remote_code=True, 
-            use_fast=False
+            trust_remote_code=True
         )
         tokenizer = processor.tokenizer
         print(f"✅ SUCCESS! Tokenizer loaded with vocab size: {len(tokenizer)}")
