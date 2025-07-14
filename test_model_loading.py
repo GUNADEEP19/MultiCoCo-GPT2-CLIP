@@ -100,7 +100,8 @@ def test_model_loading():
         test_text = "Hello, how are you?"
         inputs = processor(text=test_text, return_tensors="pt")
         if torch.cuda.is_available():
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            # Filter out None values before moving to GPU
+            inputs = {k: v.to(device) for k, v in inputs.items() if v is not None}
         
         with torch.no_grad():
             outputs = model(**inputs)
