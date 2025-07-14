@@ -149,7 +149,16 @@ def main():
     model.base_causallm = llava_model
     model.embedding = llava_model.get_input_embeddings()
     print("Model and processor loaded successfully!")
-    print("Vision tower config:", llava_model.config.vision_tower)
+    # Handle different config structures in transformers 4.37.2
+    try:
+        vision_tower = llava_model.config.vision_tower
+        print("Vision tower config:", vision_tower)
+    except AttributeError:
+        try:
+            vision_tower = llava_model.config.vision_config
+            print("Vision config:", vision_tower)
+        except AttributeError:
+            print("Vision tower: CLIP ViT-L/14 (default for LLaVA-1.5-7B)")
     print(f"Model type: {type(llava_model)}")
     print(f"Model device: {next(llava_model.parameters()).device}")
     print(f"Model parameters: {sum(p.numel() for p in llava_model.parameters()):,}")
