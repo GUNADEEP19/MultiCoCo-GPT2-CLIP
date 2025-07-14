@@ -15,6 +15,7 @@ from tqdm.notebook import tqdm
 from transformers import LlavaForCausalLM, LlavaProcessor
 import copy
 import umap
+import random
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
@@ -219,6 +220,14 @@ def main():
         tsne_labels = []
         gen_token_counts = []
         sample_preds = []
+        # Select 3-5 fixed validation samples for latent trajectory tracking
+        # Hardcode your chosen validation indices here (replace with your own)
+        fixed_traj_indices = [12, 45, 78]  # <-- Replace with your chosen indices
+        if epoch == 0:
+            wandb.config.update({"latent_traj_indices": fixed_traj_indices}, allow_val_change=True)
+        else:
+            fixed_traj_indices = wandb.config.get("latent_traj_indices", [])
+        latent_traj_dict = getattr(main, "latent_traj_dict", {}) if hasattr(main, "latent_traj_dict") else {i: [] for i in fixed_traj_indices}
         with torch.no_grad():
             vbar = tqdm(val_loader, desc="Validating", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
             for batch in vbar:
@@ -299,6 +308,17 @@ def main():
                         "image_path": image_path,  # This is the path from the dataset (Drive or local)
                         "mean_latent": str(mean_latent) if mean_latent is not None else ""
                     })
+                # For latent trajectory logging: collect mean latent for fixed samples
+                idx_val = idxs[0].item()
+                if idx_val in fixed_traj_indices and out.inputs_embeds is not None:
+                    latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                    latent_mask = (batch["input_ids"] == latent_id)
+                    latent_embeds = out.inputs_embeds[0][latent_mask[0]].detach().cpu().numpy()
+                    if latent_embeds.shape[0] > 0:
+                        mean_latent = latent_embeds.mean(axis=0)
+                        if idx_val not in latent_traj_dict:
+                            latent_traj_dict[idx_val] = []
+                        latent_traj_dict[idx_val].append(mean_latent)
         # Histogram of generated token counts
         if len(gen_token_counts) > 0:
             fig_hist, ax_hist = plt.subplots()
@@ -397,6 +417,31 @@ def main():
             for row in sample_preds:
                 table.add_data(row["question"], row["ground_truth"], row["prediction"], row["image_path"], row["mean_latent"])
             wandb.log({"sample_predictions": table})
+        # At every 5th epoch, plot latent trajectories for tracked samples
+        if (epoch+1) % 5 == 0 and len(latent_traj_dict) > 0:
+            # Stack all mean latents for all tracked samples
+            all_latents = []
+            sample_ids = []
+            for idx, traj in latent_traj_dict.items():
+                all_latents.extend(traj)
+                sample_ids.extend([idx]*len(traj))
+            if len(all_latents) > 0:
+                reducer = umap.UMAP(n_components=2, random_state=42)
+                umap_proj = reducer.fit_transform(np.stack(all_latents))
+                fig_traj, ax_traj = plt.subplots(figsize=(7, 6))
+                color_map = plt.cm.get_cmap('tab10', len(latent_traj_dict))
+                offset = 0
+                for i, idx in enumerate(latent_traj_dict):
+                    n_points = len(latent_traj_dict[idx])
+                    if n_points > 1:
+                        ax_traj.plot(umap_proj[offset:offset+n_points, 0], umap_proj[offset:offset+n_points, 1], marker='o', label=f'Sample {idx}', color=color_map(i))
+                    offset += n_points
+                ax_traj.set_title(f"Latent Trajectories (Epoch {epoch+1})")
+                ax_traj.legend()
+                wandb.log({"latent_trajectories": wandb.Image(fig_traj)})
+                plt.close(fig_traj)
+            # Save for next epoch
+            main.latent_traj_dict = latent_traj_dict
     wandb_run.finish()
 
     # Save tokenizer with special tokens for future inference

@@ -1,4 +1,4 @@
-# 🥥 Multimodal Latent Reasoning with GPT-2 + CLIP (Coconut-style)
+# 🥥 Multimodal Latent Reasoning with LLaVA (Coconut-style)
 
 This project implements a Coconut-style latent reasoning framework combining **GPT-2** (for text) and **CLIP** (for vision) to solve multimodal question answering tasks like **A-OKVQA**. It supports training with **latent tokens**, curriculum learning, and stage-wise reasoning injection.
 

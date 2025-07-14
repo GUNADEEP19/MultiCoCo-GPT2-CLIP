@@ -33,24 +33,24 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
         def __len__(self): return len(base_dataset)
         def __getitem__(self, idx):
             ex = base_dataset[idx]
-            if random.random() < uniform_prob:
-                total_steps = len(ex["steps"]) if ex["steps"] is not None else 0
-                k = random.randint(0, total_steps)
-            else:
-                total_steps = len(ex["steps"]) if ex["steps"] is not None else 0
-                k = min(scheduled_stage, total_steps)
-            n_latent = k * c_thought
+            FIXED_N_LATENTS = 10
+            total_steps = len(ex["steps"]) if ex.get("steps") else 0
+            n_latent = min(FIXED_N_LATENTS, total_steps)
+            remaining_steps = ex["steps"][n_latent:] if total_steps > n_latent else []
             q = ex["question"]
             s = ex["steps"]
             a = ex["answer"]
-            # Compose text with latent tokens
+            # Compose text with fixed latent tokens
             question_with_latents = q
             if not no_special_marker:
                 question_with_latents += " <|start-latent|>"
             question_with_latents += " " + "<|latent|> " * n_latent
+            # Add unused latent slots if total_steps < FIXED_N_LATENTS
+            if n_latent < FIXED_N_LATENTS:
+                question_with_latents += "<|latent|> " * (FIXED_N_LATENTS - n_latent)
             if not no_special_marker:
                 question_with_latents += "<|end-latent|> "
-            question_with_latents += " " + " ".join(s[k:])
+            question_with_latents += " " + " ".join(remaining_steps)
             question_with_latents += " " + a
             # Build LLaVA chat template conversation
             conversation = [
@@ -88,6 +88,12 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             end_latent_id = processor.tokenizer.convert_tokens_to_ids("<|end-latent|>")
             end_latent_positions = (input_ids == end_latent_id).nonzero(as_tuple=True)[0]
             labels[end_latent_positions] = -100
+            # Mask unused latent slots (if any)
+            latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+            latent_positions = (input_ids == latent_id).nonzero(as_tuple=True)[0]
+            if len(latent_positions) > n_latent:
+                mask_out = latent_positions[n_latent:]
+                labels[mask_out] = -100
             return {
                 "input_ids":      input_ids,
                 "attention_mask": attention_mask,

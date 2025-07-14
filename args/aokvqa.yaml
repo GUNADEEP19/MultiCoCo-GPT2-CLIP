@@ -18,7 +18,6 @@ val_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_va
 
 # 🧠 Curriculum configs
 c_thought: 1             # Try 1 for fewer latent tokens per step
-epochs_per_stage: 4      # More epochs per stage for slower curriculum
 uniform_prob: 0.1
 
 # 🧠 Latent-space configs (REQUIRED for EM-style training)
