@@ -7,6 +7,8 @@ import torch
 import wandb
 import argparse
 import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.manifold import TSNE
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
@@ -58,6 +60,9 @@ def main():
     local_ckpt_dir = "/content/checkpoints"
     os.makedirs(local_ckpt_dir, exist_ok=True)
 
+    optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
+    scaler = GradScaler()
+
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
@@ -69,14 +74,20 @@ def main():
 
     # model & processor
     processor = LlavaProcessor.from_pretrained(configs.model_id)
+    tokenizer = processor.tokenizer
+    special_tokens_dict = {
+        "additional_special_tokens": ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
+    }
+    tokenizer.add_special_tokens(special_tokens_dict)
     model = Coconut(
         model_id=configs.model_id,
-        latent_token_id=processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-        start_latent_id=processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
-        end_latent_id=processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"),
-        eos_token_id=processor.tokenizer.eos_token_id
+        latent_token_id=tokenizer.convert_tokens_to_ids("<|latent|>"),
+        start_latent_id=tokenizer.convert_tokens_to_ids("<|start-latent|>"),
+        end_latent_id=tokenizer.convert_tokens_to_ids("<|end-latent|>"),
+        eos_token_id=tokenizer.eos_token_id
     )
     model = model.to(device)
+    model.base_causallm.resize_token_embeddings(len(tokenizer))
 
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
     print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
@@ -152,7 +163,8 @@ def main():
                         position_ids=batch.get("position_ids"),
                         attention_mask=batch["attention_mask"],
                         pixel_values=batch.get("pixel_values"),
-                        labels=labels
+                        labels=labels,
+                        latents=Z
                     )
                     loss_z = outputs.loss
                 loss_z.backward()
@@ -166,7 +178,8 @@ def main():
                     position_ids=batch.get("position_ids"),
                     attention_mask=batch["attention_mask"],
                     pixel_values=batch.get("pixel_values"),
-                    labels=batch["labels"]
+                    labels=batch["labels"],
+                    latents=Z
                 )
                 loss_m = outputs.loss
             scaler.scale(loss_m).backward()
@@ -196,7 +209,9 @@ def main():
             collate_fn=collator,
             pin_memory=True
         )
-        vloss, correct, tot, tokens, total_gen_tokens, num_samples, exact_matches = 0.0, 0, 0, 0, 0, 0, 0
+        vloss, tokens, total_gen_tokens, num_samples, exact_matches = 0.0, 0, 0, 0, 0
+        tsne_embeds = []
+        tsne_labels = []
         with torch.no_grad():
             vbar = tqdm(val_loader, desc="Validating", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
             for batch in vbar:
@@ -210,15 +225,20 @@ def main():
                     position_ids=batch.get("position_ids"),
                     attention_mask=batch["attention_mask"],
                     pixel_values=batch.get("pixel_values"),
-                    labels=batch["labels"]
+                    labels=batch["labels"],
+                    latents=Z
                 )
                 loss = out.loss
+                # t-SNE collection (unchanged)
+                if out.inputs_embeds is not None and len(tsne_embeds) < 100:
+                    latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                    latent_mask = (batch["input_ids"] == latent_id)
+                    for b in range(out.inputs_embeds.shape[0]):
+                        latent_embeds = out.inputs_embeds[b][latent_mask[b]].detach().cpu().numpy()
+                        if latent_embeds.shape[0] > 0:
+                            tsne_embeds.append(latent_embeds.mean(axis=0))
+                            tsne_labels.append(val_data[idxs[b].item()]["answer"])
                 vloss += loss.item()
-                preds = out.logits.argmax(-1)
-                mask = (batch["labels"] != -100)
-                correct += ((preds == batch["labels"]) & mask).sum().item()
-                tot += mask.sum().item()
-                tokens += ((preds != processor.tokenizer.pad_token_id) & mask).sum().item()
                 # --- Token counting logic for COCONUT ---
                 input_ids = batch["input_ids"][0].tolist()
                 latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
@@ -227,28 +247,42 @@ def main():
                     answer_start = last_latent_idx + 1
                 except ValueError:
                     answer_start = 0
+                preds = out.logits.argmax(-1)
                 pred_answer_ids = preds[0][answer_start:]
                 output_text = processor.tokenizer.decode(pred_answer_ids, skip_special_tokens=True)
                 num_gen_tokens = len(processor.tokenizer.encode(output_text, add_special_tokens=False))
                 total_gen_tokens += num_gen_tokens
                 num_samples += 1
-                # --- Answer-level accuracy ---
-                gt_answer = val_data[idxs[0].item()]["answer"]
-                if output_text.strip().lower() == gt_answer.strip().lower():
+                # --- Answer-level accuracy with index-to-label mapping ---
+                question_str = val_data[idxs[0].item()]["question"]
+                gt_index = int(val_data[idxs[0].item()]["answer"])
+                if "The choices are" in question_str:
+                    choices_str = question_str.split("The choices are")[-1].strip()
+                    choice_map = {}
+                    for part in choices_str.split(","):
+                        if ":" in part:
+                            idx, val = part.strip().split(":", 1)
+                            choice_map[int(idx.strip())] = val.strip()
+                    gt_answer = choice_map.get(gt_index, str(gt_index))
+                else:
+                    gt_answer = str(gt_index)
+                print(f"[PRED] Q: {question_str}")
+                print(f"[PRED] GT: {gt_answer} | Pred: {output_text.strip()}")
+                def normalize(text):
+                    return text.lower().strip().rstrip(".,!?")
+                if normalize(output_text) == normalize(gt_answer):
                     exact_matches += 1
                 vbar.set_postfix(val_loss=loss.item())
         avg_vl = vloss / len(val_loader)
-        acc = 100 * correct / tot
-        avg_tk = tokens / len(val_loader)
         avg_gen_tokens = total_gen_tokens / num_samples if num_samples > 0 else 0
         answer_acc = 100 * exact_matches / num_samples if num_samples > 0 else 0
         val_losses.append(avg_vl)
-        accuracies.append(acc)
-        token_counts.append(avg_tk)
-        print(f"✅ Val loss {avg_vl:.4f} | TokenAcc {acc:.2f}% | AnsAcc {answer_acc:.2f}% | AvgTokens {avg_tk:.1f} | AvgGenTokens {avg_gen_tokens:.1f}")
+        accuracies.append(answer_acc)
+        token_counts.append(avg_gen_tokens)
+        print(f"✅ Val loss {avg_vl:.4f} | AnsAcc {answer_acc:.2f}% | AvgGenTokens {avg_gen_tokens:.1f}")
         with open(metrics_csv, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([epoch+1, stage, avg_train, avg_vl, acc, answer_acc, avg_tk, avg_gen_tokens])
+            writer.writerow([epoch+1, stage, avg_train, avg_vl, answer_acc, avg_gen_tokens])
         if avg_vl < best_val:
             if prev_best_ckpt is not None and os.path.exists(prev_best_ckpt):
                 os.remove(prev_best_ckpt)
@@ -264,7 +298,7 @@ def main():
                 "latents": all_latents,
                 "epoch": epoch+1
             }, best_ckpt)
-            best_info = {"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}
+            best_info = {"epoch": epoch+1, "val_loss": avg_vl, "val_acc": answer_acc, "avg_tokens": avg_gen_tokens}
             with open(os.path.join(save_dir, "best_info.json"), "w") as f:
                 json.dump(best_info, f, indent=2)
             with open(os.path.join(local_ckpt_dir, "best_info.json"), "w") as f:
@@ -298,7 +332,22 @@ def main():
         wandb.log({f"loss_plot_{epoch+1}": wandb.Image(fig)})
         plt.close(fig)
         print(f"⏱ Epoch time: {(time.time() - epoch_start)/60:.2f} mins")
+        # t-SNE visualization and W&B logging
+        if len(tsne_embeds) > 5:
+            tsne = TSNE(n_components=2, random_state=42)
+            tsne_proj = tsne.fit_transform(np.stack(tsne_embeds))
+            fig, ax = plt.subplots(figsize=(6, 5))
+            scatter = ax.scatter(tsne_proj[:, 0], tsne_proj[:, 1], c=[int(l) for l in tsne_labels], cmap="tab10", alpha=0.7)
+            legend1 = ax.legend(*scatter.legend_elements(), title="Answer")
+            ax.add_artist(legend1)
+            ax.set_title(f"t-SNE of Latent-Conditioned Embeddings (Epoch {epoch+1})")
+            wandb.log({"tsne_latent_embeds": wandb.Image(fig)})
+            plt.close(fig)
     wandb_run.finish()
+
+    # Save tokenizer with special tokens for future inference
+    tokenizer.save_pretrained(os.path.join(local_ckpt_dir, "tokenizer"))
+    tokenizer.save_pretrained(save_dir)
 
 if __name__ == "__main__":
     main()

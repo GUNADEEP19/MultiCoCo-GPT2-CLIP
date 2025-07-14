@@ -44,20 +44,28 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             s = ex["steps"]
             a = ex["answer"]
             # Compose text with latent tokens
-            tokens = q
+            question_with_latents = q
             if not no_special_marker:
-                tokens += " <|start-latent|>"
-            tokens += " " + "<|latent|> " * n_latent
+                question_with_latents += " <|start-latent|>"
+            question_with_latents += " " + "<|latent|> " * n_latent
             if not no_special_marker:
-                tokens += "<|end-latent|> "
-            tokens += " " + " ".join(s[k:])
-            tokens += " " + a
-            # Use processor to get input_ids, attention_mask, pixel_values
+                question_with_latents += "<|end-latent|> "
+            question_with_latents += " " + " ".join(s[k:])
+            question_with_latents += " " + a
+            # Build LLaVA chat template conversation
+            conversation = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": question_with_latents.strip()}
+                    ]
+                }
+            ]
+            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
             image_path = ex.get("image", None)
             if image_path is not None:
                 if not os.path.isabs(image_path):
-                    # If the path is relative, resolve relative to the JSON file's directory or provide a base path
-                    # For now, assume image_path is absolute or Colab working directory is set correctly
                     pass
                 try:
                     img = Image.open(image_path).convert("RGB")
@@ -67,7 +75,7 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
                     img_tensor = None
             else:
                 img_tensor = None
-            processed = processor(text=tokens, images=img_tensor, return_tensors="pt", padding="max_length", max_length=max_len)
+            processed = processor(text=prompt, images=img_tensor, return_tensors="pt", padding="max_length", max_length=max_len)
             input_ids = processed.input_ids[0]
             attention_mask = processed.attention_mask[0]
             pixel_values = processed.pixel_values[0] if img_tensor is not None else None

@@ -134,8 +134,14 @@ def main():
             writer.writerow(["epoch", "train_loss", "val_loss", "val_acc", "avg_tokens"])
 
     processor = LlavaProcessor.from_pretrained(configs.model_id)
+    tokenizer = processor.tokenizer
+    special_tokens_dict = {
+        "additional_special_tokens": ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
+    }
+    tokenizer.add_special_tokens(special_tokens_dict)
     model = LlavaForCausalLM.from_pretrained(configs.model_id)
     model = model.to(device)
+    model.resize_token_embeddings(len(tokenizer))
 
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
