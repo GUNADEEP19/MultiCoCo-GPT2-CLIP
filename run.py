@@ -157,7 +157,9 @@ def main():
                 latent_optimizer.zero_grad()
                 # inject_latents logic can be adapted if needed
                 labels = batch["labels"]
-                with autocast(device_type='cuda'):
+                use_bf16 = getattr(configs, "bf16", False)
+                autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
+                with autocast(device_type='cuda', dtype=autocast_dtype):
                     outputs = model(
                         input_ids=batch["input_ids"],
                         position_ids=batch.get("position_ids"),
@@ -172,7 +174,9 @@ def main():
             all_latents.requires_grad = False
             model.train()
             optimizer.zero_grad()
-            with autocast(device_type='cuda'):
+            use_bf16 = getattr(configs, "bf16", False)
+            autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
+            with autocast(device_type='cuda', dtype=autocast_dtype):
                 outputs = model(
                     input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),

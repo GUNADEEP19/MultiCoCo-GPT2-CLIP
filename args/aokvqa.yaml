@@ -1,7 +1,7 @@
 name: run_1_aokvqa_baseline
 model_id: llava-hf/llava-1.5-7b-hf
 seed: 42
-bf16: false  # Not using bf16; using fp16 (via AMP)
+bf16: true
 project: Coconut_Aokvqa_Guna_LLaVA-1.5-7B
 
 # ✅ Save checkpoints to Google Drive (persistent)
@@ -29,9 +29,9 @@ e_steps: 3                # Number of E-step optimization steps per batch
 
 # 🏋️ Training configs for Colab Free Tier
 num_epochs: 40
-batch_size_training: 32         # Increased for A100 GPU (was 8)
+batch_size_training: 48         # Increased for A100 GPU (was 8)
 gradient_accumulation_steps: 1 # No accumulation needed for A100, batch size 32
-lr: 2e-4
+lr: 1e-4
 weight_decay: 0.0
 
 max_length: 512  # Optimal for A-OKVQA, fits all data, saves memory
