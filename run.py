@@ -85,6 +85,7 @@ def main():
     model.processor = processor
     model.base_causallm = llava_model
     model.embedding = llava_model.get_input_embeddings()
+    print("Model and processor loaded successfully!")
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
     scaler = GradScaler()
