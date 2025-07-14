@@ -12,11 +12,24 @@ from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 from llava_hf import LlavaForCausalLM, LlavaProcessor
 import copy
+from PIL import Image
 
-from coconut import Coconut
-from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
 from torch.amp import autocast, GradScaler
+
+def get_dataset(path, max_size=1_000_000_00):
+    with open(path, "r") as f:
+        raw = json.load(f)[:max_size]
+    return [
+        {
+            "question": d["question"],
+            "steps": d["steps"],
+            "answer": d["answer"],
+            "image": d.get("image", None),
+            "idx": i
+        }
+        for i, d in enumerate(raw)
+    ]
 
 def decode_preds(pred_ids, processor):
     if pred_ids.ndim == 2:
@@ -24,6 +37,59 @@ def decode_preds(pred_ids, processor):
     pred_ids = pred_ids.tolist()
     pred_ids = [i for i in pred_ids if i != -100]
     return processor.tokenizer.decode(pred_ids, skip_special_tokens=True)
+
+def get_cot_dataset(base_dataset, processor, max_len=512):
+    class CoTDataset(torch.utils.data.Dataset):
+        def __len__(self): return len(base_dataset)
+        def __getitem__(self, idx):
+            ex = base_dataset[idx]
+            # Compose full CoT prompt: question + all steps + answer
+            text = ex["question"]
+            if len(ex["steps"]) > 0:
+                text += " " + " ".join(ex["steps"])
+            text += " " + ex["answer"]
+            image_path = ex.get("image", None)
+            if image_path is not None:
+                try:
+                    img = Image.open(image_path).convert("RGB")
+                    img_tensor = processor.image_processor(img, return_tensors="pt")["pixel_values"][0]
+                except Exception as e:
+                    print(f"[WARNING] Could not load image {image_path}: {e}")
+                    img_tensor = None
+            else:
+                img_tensor = None
+            processed = processor(text=text, images=img_tensor, return_tensors="pt", padding="max_length", max_length=max_len)
+            input_ids = processed.input_ids[0]
+            attention_mask = processed.attention_mask[0]
+            pixel_values = processed.pixel_values[0] if img_tensor is not None else None
+            position_ids = torch.arange(len(input_ids)).clamp(max=max_len-1)
+            labels = input_ids.clone()
+            return {
+                "input_ids":      input_ids,
+                "attention_mask": attention_mask,
+                "pixel_values":   pixel_values,
+                "position_ids":   position_ids,
+                "labels":         labels,
+                "idx":            idx
+            }
+    return CoTDataset()
+
+class MyCollator:
+    def __init__(self, processor, label_pad_token_id=-100):
+        self.pad_token_id       = processor.tokenizer.pad_token_id
+        self.label_pad_token_id = label_pad_token_id
+    def __call__(self, batch):
+        keys = ["input_ids", "attention_mask", "position_ids", "labels"]
+        output = {}
+        for key in keys:
+            seqs = [ex[key] for ex in batch]
+            pad_val = (self.pad_token_id if key != "labels" else self.label_pad_token_id)
+            output[key] = torch.nn.utils.rnn.pad_sequence(
+                seqs, batch_first=True, padding_value=pad_val
+            )
+        output["pixel_values"] = torch.stack([ex["pixel_values"] for ex in batch if ex["pixel_values"] is not None]) if batch[0]["pixel_values"] is not None else None
+        output["idx"] = torch.tensor([ex["idx"] for ex in batch], dtype=torch.long)
+        return output
 
 def main():
     parser = argparse.ArgumentParser()
@@ -44,7 +110,7 @@ def main():
     wandb.login()
     wandb_run = wandb.init(
         project=configs.project,
-        name=configs.name,
+        name=configs.name + "_cot",
         config=vars(configs),
         resume=True,
         reinit=True
@@ -53,7 +119,7 @@ def main():
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    save_dir = "/content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gunadeep"
+    save_dir = configs.save_path
     os.makedirs(save_dir, exist_ok=True)
     local_ckpt_dir = "/content/checkpoints"
     os.makedirs(local_ckpt_dir, exist_ok=True)
@@ -61,68 +127,40 @@ def main():
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
-    metrics_csv = os.path.join(save_dir, "metrics.csv")
+    metrics_csv = os.path.join(save_dir, "metrics_cot.csv")
     if not os.path.exists(metrics_csv):
         with open(metrics_csv, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "stage", "train_loss", "val_loss", "val_acc", "avg_tokens"])
+            writer.writerow(["epoch", "train_loss", "val_loss", "val_acc", "avg_tokens"])
 
-    # model & processor
     processor = LlavaProcessor.from_pretrained(configs.model_id)
-    model = Coconut(
-        model_id=configs.model_id,
-        latent_token_id=processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-        start_latent_id=processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
-        end_latent_id=processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"),
-        eos_token_id=processor.tokenizer.eos_token_id
-    )
+    model = LlavaForCausalLM.from_pretrained(configs.model_id)
     model = model.to(device)
-
-    print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
-    print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
 
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
     collator = MyCollator(processor, label_pad_token_id=-100)
 
-    n_train = len(train_data)
-    hidden_size = model.base_causallm.config.hidden_size
-
     if ckpt_path and os.path.exists(ckpt_path):
         print(f"🔁 Resuming from checkpoint: {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model"])
-        if "ema_model" in ckpt:
-            ema_model.load_state_dict(ckpt["ema_model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         scaler.load_state_dict(ckpt["scaler"])
-        all_latents = ckpt["latents"].to(device).detach().requires_grad_(True)
         start_epoch = ckpt["epoch"]
-    else:
-        all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
-
-    latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
     scaler = GradScaler()
 
     patience = 8
     best_val = float("inf")
     patience_counter = 0
-    ema_model = copy.deepcopy(model)
-    ema_decay = 0.999
-
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
     printed_checkpoint_reminder = False
     prev_best_ckpt = None
     for epoch in range(start_epoch, configs.num_epochs):
-        stage = epoch // configs.epochs_per_stage
-        print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} ===")
+        print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} ===")
         epoch_start = time.time()
-
-        train_ds = get_cot_latent_dataset(train_data, stage, configs,
-                                          processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
-                                          processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-                                          processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"))
+        train_ds = get_cot_dataset(train_data, processor, max_len=getattr(configs, "max_length", 512))
         loader = DataLoader(
             train_ds,
             batch_size=configs.batch_size_training,
@@ -130,35 +168,13 @@ def main():
             collate_fn=collator,
             pin_memory=True
         )
-
         model.train()
         total_loss = 0.0
         pbar = tqdm(loader, desc="Training", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
-
         for batch in pbar:
             for k in batch:
                 if isinstance(batch[k], torch.Tensor):
                     batch[k] = batch[k].to(device)
-            idxs = batch["idx"]
-            Z = all_latents[idxs]
-            model.eval()
-            for _ in range(configs.e_steps):
-                latent_optimizer.zero_grad()
-                # inject_latents logic can be adapted if needed
-                labels = batch["labels"]
-                with autocast(device_type='cuda'):
-                    outputs = model(
-                        input_ids=batch["input_ids"],
-                        position_ids=batch.get("position_ids"),
-                        attention_mask=batch["attention_mask"],
-                        pixel_values=batch.get("pixel_values"),
-                        labels=labels
-                    )
-                    loss_z = outputs.loss
-                loss_z.backward()
-                latent_optimizer.step()
-            all_latents.requires_grad = False
-            model.train()
             optimizer.zero_grad()
             with autocast(device_type='cuda'):
                 outputs = model(
@@ -168,27 +184,19 @@ def main():
                     pixel_values=batch.get("pixel_values"),
                     labels=batch["labels"]
                 )
-                loss_m = outputs.loss
-            scaler.scale(loss_m).backward()
+                loss = outputs.loss
+            scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            with torch.no_grad():
-                for param, ema_param in zip(model.parameters(), ema_model.parameters()):
-                    ema_param.data = ema_decay * ema_param.data + (1 - ema_decay) * param.data
-            total_loss += loss_m.item()
-            all_latents.requires_grad = True
-            pbar.set_postfix(train_loss=loss_m.item())
-            wandb_run.log({"train/loss_step": loss_m.item(), "train/epoch": epoch+1})
+            total_loss += loss.item()
+            pbar.set_postfix(train_loss=loss.item())
+            wandb_run.log({"train/loss_step": loss.item(), "train/epoch": epoch+1})
         avg_train = total_loss / len(loader)
         train_losses.append(avg_train)
         print(f"📉 Avg train loss: {avg_train:.4f}")
-
         model.eval()
-        val_ds = get_cot_latent_dataset(val_data, stage, configs,
-                                        processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
-                                        processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-                                        processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"))
+        val_ds = get_cot_dataset(val_data, processor, max_len=getattr(configs, "max_length", 512))
         val_loader = DataLoader(
             val_ds,
             batch_size=1,
@@ -203,8 +211,6 @@ def main():
                 for k in batch:
                     if isinstance(batch[k], torch.Tensor):
                         batch[k] = batch[k].to(device)
-                idxs = batch["idx"]
-                Z = all_latents[idxs]
                 out = model(
                     input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),
@@ -219,20 +225,14 @@ def main():
                 correct += ((preds == batch["labels"]) & mask).sum().item()
                 tot += mask.sum().item()
                 tokens += ((preds != processor.tokenizer.pad_token_id) & mask).sum().item()
-                # --- Token counting logic for COCONUT ---
-                input_ids = batch["input_ids"][0].tolist()
-                latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
-                try:
-                    last_latent_idx = max(i for i, t in enumerate(input_ids) if t == latent_id)
-                    answer_start = last_latent_idx + 1
-                except ValueError:
-                    answer_start = 0
-                pred_answer_ids = preds[0][answer_start:]
+                # --- Token counting logic for CoT ---
+                pred_answer_ids = preds[0].tolist()
                 output_text = processor.tokenizer.decode(pred_answer_ids, skip_special_tokens=True)
                 num_gen_tokens = len(processor.tokenizer.encode(output_text, add_special_tokens=False))
                 total_gen_tokens += num_gen_tokens
                 num_samples += 1
                 # --- Answer-level accuracy ---
+                idxs = batch["idx"]
                 gt_answer = val_data[idxs[0].item()]["answer"]
                 if output_text.strip().lower() == gt_answer.strip().lower():
                     exact_matches += 1
@@ -248,7 +248,7 @@ def main():
         print(f"✅ Val loss {avg_vl:.4f} | TokenAcc {acc:.2f}% | AnsAcc {answer_acc:.2f}% | AvgTokens {avg_tk:.1f} | AvgGenTokens {avg_gen_tokens:.1f}")
         with open(metrics_csv, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([epoch+1, stage, avg_train, avg_vl, acc, answer_acc, avg_tk, avg_gen_tokens])
+            writer.writerow([epoch+1, avg_train, avg_vl, acc, answer_acc, avg_tk, avg_gen_tokens])
         if avg_vl < best_val:
             if prev_best_ckpt is not None and os.path.exists(prev_best_ckpt):
                 os.remove(prev_best_ckpt)
@@ -258,16 +258,14 @@ def main():
             best_ckpt = os.path.join(local_ckpt_dir, best_ckpt_name)
             torch.save({
                 "model": model.state_dict(),
-                "ema_model": ema_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scaler": scaler.state_dict(),
-                "latents": all_latents,
                 "epoch": epoch+1
             }, best_ckpt)
             best_info = {"epoch": epoch+1, "val_loss": avg_vl, "val_acc": acc, "avg_tokens": avg_tk}
-            with open(os.path.join(save_dir, "best_info.json"), "w") as f:
+            with open(os.path.join(save_dir, "best_info_cot.json"), "w") as f:
                 json.dump(best_info, f, indent=2)
-            with open(os.path.join(local_ckpt_dir, "best_info.json"), "w") as f:
+            with open(os.path.join(local_ckpt_dir, "best_info_cot.json"), "w") as f:
                 json.dump(best_info, f, indent=2)
             prev_best_ckpt = best_ckpt
         else:
@@ -279,10 +277,8 @@ def main():
         ckpt = os.path.join(local_ckpt_dir, ckpt_name)
         torch.save({
             "model": model.state_dict(),
-            "ema_model": ema_model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "scaler": scaler.state_dict(),
-            "latents": all_latents,
             "epoch": epoch+1
         }, ckpt)
         wandb.save(ckpt, base_path=local_ckpt_dir)
@@ -301,4 +297,4 @@ def main():
     wandb_run.finish()
 
 if __name__ == "__main__":
-    main()
+    main() 
