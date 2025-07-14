@@ -12,7 +12,6 @@ from sklearn.manifold import TSNE
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
-from transformers import LlavaForCausalLM, LlavaProcessor
 import copy
 import umap
 import random
@@ -151,7 +150,8 @@ def main():
         train_ds = get_cot_latent_dataset(train_data, stage, configs,
                                           processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
                                           processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-                                          processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"))
+                                          processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"),
+                                          processor)
         loader = DataLoader(
             train_ds,
             batch_size=configs.batch_size_training,
@@ -223,7 +223,8 @@ def main():
         val_ds = get_cot_latent_dataset(val_data, stage, configs,
                                         processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
                                         processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-                                        processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"))
+                                        processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"),
+                                        processor)
         val_loader = DataLoader(
             val_ds,
             batch_size=1,

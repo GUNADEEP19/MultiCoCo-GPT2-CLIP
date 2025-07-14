@@ -23,8 +23,8 @@ def get_dataset(path, tokenizer=None, max_size=1_000_000_00):
 
 def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
                            start_id, latent_id, end_id,
+                           processor,
                            no_special_marker=False, shuffle=False):
-    processor = LlavaProcessor.from_pretrained(configs.model_id)
     c_thought        = configs.c_thought
     uniform_prob     = configs.uniform_prob
     max_len          = getattr(configs, "max_length", 1024)
