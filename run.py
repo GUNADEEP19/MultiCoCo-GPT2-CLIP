@@ -86,6 +86,7 @@ def main():
     model.base_causallm = llava_model
     model.embedding = llava_model.get_input_embeddings()
     print("Model and processor loaded successfully!")
+    print("Vision tower config:", llava_model.config.vision_tower)
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
     scaler = GradScaler()
