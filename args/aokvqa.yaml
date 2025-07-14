@@ -1,5 +1,5 @@
 name: run_1_aokvqa_baseline
-model_id: /content/hf_cache/llava-hf/llava-1.5-7b-hf
+model_id: llava-hf/llava-1.5-7b-hf
 seed: 42
 bf16: true
 project: Coconut_Aokvqa_Guna_LLaVA-1.5-7B

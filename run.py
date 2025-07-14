@@ -62,9 +62,9 @@ def main():
 
     # model & processor
     tokenizer, llava_model, processor = load_pretrained_model(
-        model_path=configs.model_id,
+        model_path=configs.model_id,  # now uses the repo id
         model_base=None,
-        model_name=configs.model_id,
+        model_name=configs.model_id,  # now uses the repo id
         load_8bit=False,
         load_4bit=False,
         device_map="auto"
