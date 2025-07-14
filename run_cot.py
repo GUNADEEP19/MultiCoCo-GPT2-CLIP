@@ -15,7 +15,7 @@ import copy
 from PIL import Image
 
 from utils import Config, set_seed
-from torch.amp import autocast, GradScaler
+from torch.cuda.amp import autocast, GradScaler
 
 def get_dataset(path, max_size=1_000_000_00):
     with open(path, "r") as f:
