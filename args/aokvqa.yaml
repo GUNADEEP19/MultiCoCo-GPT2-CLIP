@@ -13,8 +13,8 @@ only_eval: false
 save_only_improve: true
 
 # ✅ Dataset paths (adjust if needed)
-train_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_train.json
-val_path: /content/MultiModal-COCONUT-GPT2-CLIP-/data/Datasets/A-OKVQA/aokvqa_validation.json
+train_path: /content/CocoLLaVA/data/Datasets/A-OKVQA/aokvqa_train.json
+val_path: /content/CocoLLaVA/data/Datasets/A-OKVQA/aokvqa_validation.json
 
 # 🧠 Curriculum configs
 c_thought: 1             # Try 1 for fewer latent tokens per step
