@@ -116,7 +116,7 @@ class MyCollator:
         output = {}
         for key in keys:
             seqs = [ex[key] for ex in batch]
-            pad_val = (self.pad_token_id if key != "labels" else self.label_pad_token_id)
+                pad_val = (self.pad_token_id if key != "labels" else self.label_pad_token_id)
             output[key] = torch.nn.utils.rnn.pad_sequence(
                 seqs, batch_first=True, padding_value=pad_val
             )

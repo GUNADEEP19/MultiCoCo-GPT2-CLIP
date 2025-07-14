@@ -33,7 +33,7 @@ class Coconut(nn.Module):
         self.start_latent_id = start_latent_id
         self.end_latent_id = end_latent_id
         self.eos_token_id = eos_token_id
-        self.embedding = self.base_causallm.get_input_embeddings()
+            self.embedding = self.base_causallm.get_input_embeddings()
 
     def inject_latents(self, input_ids, latents):
         """
@@ -82,7 +82,7 @@ class Coconut(nn.Module):
                 labels=labels,
                 **kwargs
             )
-        else:
+            else:
             input_embeds = None
             outputs = self.base_causallm(
                 input_ids=input_ids,
