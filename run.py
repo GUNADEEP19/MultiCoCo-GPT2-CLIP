@@ -13,8 +13,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 import copy
-import umap
-import random
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
@@ -414,16 +412,6 @@ def main():
             ax.set_title(f"t-SNE of Latent-Conditioned Embeddings (Epoch {epoch+1})")
             wandb.log({"tsne_latent_embeds": wandb.Image(fig)})
             plt.close(fig)
-            # UMAP visualization and W&B logging
-            reducer = umap.UMAP(n_components=2, random_state=42)
-            umap_proj = reducer.fit_transform(np.stack(tsne_embeds))
-            fig_umap, ax_umap = plt.subplots(figsize=(6, 5))
-            scatter_umap = ax_umap.scatter(umap_proj[:, 0], umap_proj[:, 1], c=[int(l) for l in tsne_labels], cmap="tab10", alpha=0.7)
-            legend_umap = ax_umap.legend(*scatter_umap.legend_elements(), title="Answer")
-            ax_umap.add_artist(legend_umap)
-            ax_umap.set_title(f"UMAP of Latent-Conditioned Embeddings (Epoch {epoch+1})")
-            wandb.log({"umap_latent_embeds": wandb.Image(fig_umap)})
-            plt.close(fig_umap)
         # Log sample predictions to W&B as a table (Coconut only)
         # Note: Reasoning steps are not logged for COCONUT, since the model reasons in latent space, not explicit text.
         if len(sample_preds) > 0:
