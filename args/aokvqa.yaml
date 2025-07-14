@@ -21,7 +21,7 @@ c_thought: 1             # Try 1 for fewer latent tokens per step
 uniform_prob: 0.1
 
 # 🧠 Latent-space configs (REQUIRED for EM-style training)
-latent_dim: 768           # GPT-2 base hidden size
+latent_dim: 4096  # ✅ Matches LLaVA-1.5-7B hidden size
 # n_latents: 4              # Number of latent tokens per sample
 latent_lr: 1e-3           # Learning rate for latent vectors (E-step)
 e_steps: 3                # Number of E-step optimization steps per batch
