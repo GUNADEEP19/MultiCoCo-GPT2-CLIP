@@ -81,13 +81,13 @@ def main():
         "additional_special_tokens": ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     }
     tokenizer.add_special_tokens(special_tokens_dict)
-        model = Coconut(
+    model = Coconut(
         model_id=configs.model_id,
         latent_token_id=tokenizer.convert_tokens_to_ids("<|latent|>"),
         start_latent_id=tokenizer.convert_tokens_to_ids("<|start-latent|>"),
         end_latent_id=tokenizer.convert_tokens_to_ids("<|end-latent|>"),
-            eos_token_id=tokenizer.eos_token_id
-        )
+        eos_token_id=tokenizer.eos_token_id
+    )
     model = model.to(device)
     model.base_causallm.resize_token_embeddings(len(tokenizer))
 
@@ -112,7 +112,7 @@ def main():
         all_latents = ckpt["latents"].to(device).detach().requires_grad_(True)
         start_epoch = ckpt["epoch"]
     else:
-    all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
+        all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
 
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
