@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 from transformers import LlavaForCausalLM, LlavaProcessor
 import copy
+import umap
 
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
@@ -216,6 +217,8 @@ def main():
         vloss, tokens, total_gen_tokens, num_samples, exact_matches = 0.0, 0, 0, 0, 0
         tsne_embeds = []
         tsne_labels = []
+        gen_token_counts = []
+        sample_preds = []
         with torch.no_grad():
             vbar = tqdm(val_loader, desc="Validating", leave=True, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
             for batch in vbar:
@@ -256,6 +259,7 @@ def main():
                 output_text = processor.tokenizer.decode(pred_answer_ids, skip_special_tokens=True)
                 num_gen_tokens = len(processor.tokenizer.encode(output_text, add_special_tokens=False))
                 total_gen_tokens += num_gen_tokens
+                gen_token_counts.append(num_gen_tokens)
                 num_samples += 1
                 # --- Answer-level accuracy with index-to-label mapping ---
                 question_str = val_data[idxs[0].item()]["question"]
@@ -277,6 +281,33 @@ def main():
                 if normalize(output_text) == normalize(gt_answer):
                     exact_matches += 1
                 vbar.set_postfix(val_loss=loss.item())
+                # Collect sample predictions for W&B logging (up to 10 random samples)
+                if len(sample_preds) < 10:
+                    image_path = val_data[idxs[0].item()].get("image", "")
+                    # For COCONUT, log mean latent vector as a string (optional, for interpretability)
+                    mean_latent = None
+                    if out.inputs_embeds is not None:
+                        latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                        latent_mask = (batch["input_ids"] == latent_id)
+                        latent_embeds = out.inputs_embeds[0][latent_mask[0]].detach().cpu().numpy()
+                        if latent_embeds.shape[0] > 0:
+                            mean_latent = np.round(latent_embeds.mean(axis=0), 4).tolist()
+                    sample_preds.append({
+                        "question": question_str,
+                        "ground_truth": gt_answer,
+                        "prediction": output_text.strip(),
+                        "image_path": image_path,  # This is the path from the dataset (Drive or local)
+                        "mean_latent": str(mean_latent) if mean_latent is not None else ""
+                    })
+        # Histogram of generated token counts
+        if len(gen_token_counts) > 0:
+            fig_hist, ax_hist = plt.subplots()
+            ax_hist.hist(gen_token_counts, bins=20, color='skyblue', edgecolor='black')
+            ax_hist.set_title(f"Histogram of Generated Token Counts (Epoch {epoch+1})")
+            ax_hist.set_xlabel("# Generated Tokens")
+            ax_hist.set_ylabel("Frequency")
+            wandb.log({"gen_token_hist": wandb.Image(fig_hist)})
+            plt.close(fig_hist)
         avg_vl = vloss / len(val_loader)
         avg_gen_tokens = total_gen_tokens / num_samples if num_samples > 0 else 0
         answer_acc = 100 * exact_matches / num_samples if num_samples > 0 else 0
@@ -347,6 +378,25 @@ def main():
             ax.set_title(f"t-SNE of Latent-Conditioned Embeddings (Epoch {epoch+1})")
             wandb.log({"tsne_latent_embeds": wandb.Image(fig)})
             plt.close(fig)
+            # UMAP visualization and W&B logging
+            reducer = umap.UMAP(n_components=2, random_state=42)
+            umap_proj = reducer.fit_transform(np.stack(tsne_embeds))
+            fig_umap, ax_umap = plt.subplots(figsize=(6, 5))
+            scatter_umap = ax_umap.scatter(umap_proj[:, 0], umap_proj[:, 1], c=[int(l) for l in tsne_labels], cmap="tab10", alpha=0.7)
+            legend_umap = ax_umap.legend(*scatter_umap.legend_elements(), title="Answer")
+            ax_umap.add_artist(legend_umap)
+            ax_umap.set_title(f"UMAP of Latent-Conditioned Embeddings (Epoch {epoch+1})")
+            wandb.log({"umap_latent_embeds": wandb.Image(fig_umap)})
+            plt.close(fig_umap)
+        # Log sample predictions to W&B as a table (Coconut only)
+        # Note: Reasoning steps are not logged for COCONUT, since the model reasons in latent space, not explicit text.
+        if len(sample_preds) > 0:
+            import wandb
+            columns = ["question", "ground_truth", "prediction", "image_path", "mean_latent"]
+            table = wandb.Table(columns=columns)
+            for row in sample_preds:
+                table.add_data(row["question"], row["ground_truth"], row["prediction"], row["image_path"], row["mean_latent"])
+            wandb.log({"sample_predictions": table})
     wandb_run.finish()
 
     # Save tokenizer with special tokens for future inference
