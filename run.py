@@ -60,18 +60,6 @@ def main():
     local_ckpt_dir = "/content/checkpoints"
     os.makedirs(local_ckpt_dir, exist_ok=True)
 
-    optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler = GradScaler()
-
-    start_epoch = configs.resume
-    ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
-
-    metrics_csv = os.path.join(save_dir, "metrics.csv")
-    if not os.path.exists(metrics_csv):
-        with open(metrics_csv, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["epoch", "stage", "train_loss", "val_loss", "val_acc", "avg_tokens"])
-
     # model & processor
     tokenizer, llava_model, processor = load_pretrained_model(
         model_path=configs.model_id,
@@ -98,6 +86,9 @@ def main():
     model.base_causallm = llava_model
     model.embedding = llava_model.get_input_embeddings()
 
+    optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
+    scaler = GradScaler()
+
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
     print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
 
@@ -122,8 +113,7 @@ def main():
         all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
 
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
-    optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler = GradScaler()
+    # Remove the earlier optimizer and scaler initialization (if present)
 
     patience = 8
     best_val = float("inf")
