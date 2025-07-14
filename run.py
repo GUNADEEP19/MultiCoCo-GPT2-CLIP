@@ -87,6 +87,9 @@ def main():
     model.embedding = llava_model.get_input_embeddings()
     print("Model and processor loaded successfully!")
     print("Vision tower config:", llava_model.config.vision_tower)
+    print(f"Model type: {type(llava_model)}")
+    print(f"Model device: {next(llava_model.parameters()).device}")
+    print(f"Model parameters: {sum(p.numel() for p in llava_model.parameters()):,}")
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
     scaler = GradScaler()
