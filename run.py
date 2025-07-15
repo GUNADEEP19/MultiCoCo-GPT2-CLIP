@@ -261,7 +261,7 @@ def main():
                 labels = batch["labels"]
                 use_bf16 = getattr(configs, "bf16", False)
                 autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
-                with autocast(device_type='cuda', dtype=autocast_dtype):
+                with autocast(dtype=autocast_dtype):
                     outputs = model(
                         input_ids=batch["input_ids"],
                         position_ids=batch.get("position_ids"),
@@ -278,7 +278,7 @@ def main():
             optimizer.zero_grad()
             use_bf16 = getattr(configs, "bf16", False)
             autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
-            with autocast(device_type='cuda', dtype=autocast_dtype):
+            with autocast(dtype=autocast_dtype):
                 outputs = model(
                     input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),
