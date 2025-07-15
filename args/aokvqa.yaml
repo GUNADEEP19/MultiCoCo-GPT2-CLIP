@@ -1,11 +1,12 @@
-name: run_1_aokvqa_baseline
-model_id: llava-hf/llava-1.5-7b-hf
+name: run_1_aokvqa_gpt2xl_clip
+model_id: gpt2-xl
+clip_id: openai/clip-vit-base-patch32
 seed: 42
 bf16: false
-project: Coconut_Aokvqa_Guna_LLaVA-1.5-7B
+project: Coconut_Aokvqa_GPT2XLCLIP
 
 # ✅ Save checkpoints to Google Drive (persistent)
-save_path: /content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gunadeep
+save_path: /content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gpt2xlclip
 load_model_path: null
 resume: 0
 reset_optimizer: false
@@ -13,30 +14,29 @@ only_eval: false
 save_only_improve: true
 
 # ✅ Dataset paths (adjust if needed)
-train_path: /content/CocoLLaVA/data/Datasets/A-OKVQA/aokvqa_train.json
-val_path: /content/CocoLLaVA/data/Datasets/A-OKVQA/aokvqa_validation.json
+train_path: /content/MultiCoCo-GPT2-CLIP/data/Datasets/A-OKVQA/aokvqa_train.json
+val_path: /content/MultiCoCo-GPT2-CLIP/data/Datasets/A-OKVQA/aokvqa_validation.json
 
 # 🧠 Curriculum configs
 c_thought: 1             # Try 1 for fewer latent tokens per step
 uniform_prob: 0.1
 
 # 🧠 Latent-space configs (REQUIRED for EM-style training)
-latent_dim: 4096  # ✅ Matches LLaVA-1.5-7B hidden size
-# n_latents: 4              # Number of latent tokens per sample
-latent_lr: 1e-3           # Learning rate for latent vectors (E-step)
-e_steps: 3                # Number of E-step optimization steps per batch
+latent_dim: 1600         # gpt2-xl hidden size
+n_latents: 8             # Number of latent tokens per sample
+latent_lr: 1e-3          # Learning rate for latent vectors (E-step)
+e_steps: 3               # Number of E-step optimization steps per batch
 
-# 🏋️ Training configs for Colab Free Tier
+# 🏋️ Training configs
 num_epochs: 28
 batch_size_training: 1          # Single sample training
 gradient_accumulation_steps: 48 # Effective batch size = 1 * 48 = 48
 lr: 1e-4
 weight_decay: 0.0
 
-# 🚀 Optional Optimizations (uncomment to enable)
-load_4bit: true              # 4-bit quantization (requires bitsandbytes)
-# use_flash_attention_2: true  # Flash Attention 2 (requires flash-attn)
+# 🚀 Optional Optimizations
+load_4bit: true                 # 4-bit quantization (requires bitsandbytes)
 
-max_length: 256  # Reduced for memory constraints - we can increase later
-max_latent_stage: 7           # Curriculum: number of latent stages
-epochs_per_stage: 4           # Curriculum: epochs per stage
+max_length: 256                 # Sequence length for GPT-2
+max_latent_stage: 8             # Curriculum: number of latent stages (should match n_latents)
+epochs_per_stage: 4             # Curriculum: epochs per stage

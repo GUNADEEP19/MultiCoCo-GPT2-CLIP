@@ -3,7 +3,7 @@ import random
 import torch
 from torch.utils.data import Dataset
 import itertools
-from PIL import Image  # <-- Add this import
+from PIL import Image
 import os
 
 def get_dataset(path, tokenizer=None, max_size=1_000_000_00):
@@ -13,7 +13,7 @@ def get_dataset(path, tokenizer=None, max_size=1_000_000_00):
         {
             "question": d["question"],
             "steps": d["steps"],
-            "answer": d["answer"],  # already string
+            "answer": d["answer"],
             "image": d.get("image", None),
             "idx": i
         }
@@ -22,18 +22,19 @@ def get_dataset(path, tokenizer=None, max_size=1_000_000_00):
 
 def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
                            start_id, latent_id, end_id,
-                           processor,
+                           tokenizer,
+                           clip_processor,
                            no_special_marker=False, shuffle=False):
     c_thought        = configs.c_thought
     uniform_prob     = configs.uniform_prob
-    max_len          = getattr(configs, "max_length", 1024)
+    max_len          = getattr(configs, "max_length", 256)  # gpt2-xl default
 
     class StageDataset(Dataset):
         def __len__(self): return len(base_dataset)
         def __getitem__(self, idx):
             ex = base_dataset[idx]
             total_steps = len(ex["steps"]) if ex.get("steps") else 0
-            n_latent = min(getattr(configs, "n_latents", 10), total_steps)
+            n_latent = min(getattr(configs, "n_latents", 8), total_steps)  # gpt2-xl default
             remaining_steps = ex["steps"][n_latent:] if total_steps > n_latent else []
             q = ex["question"]
             s = ex["steps"]
@@ -43,59 +44,48 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             if not no_special_marker:
                 question_with_latents += " <|start-latent|>"
             question_with_latents += " " + "<|latent|> " * n_latent
-            max_latents = getattr(configs, "n_latents", 10)
+            max_latents = getattr(configs, "n_latents", 8)  # gpt2-xl default
             if n_latent < max_latents:
                 question_with_latents += "<|latent|> " * (max_latents - n_latent)
             if not no_special_marker:
                 question_with_latents += "<|end-latent|> "
             question_with_latents += " " + " ".join(remaining_steps)
             question_with_latents += " " + a
-            # Build LLaVA chat template conversation
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text", "text": question_with_latents.strip()}
-                    ]
-                }
-            ]
-            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+            prompt = question_with_latents.strip()
             image_path = ex.get("image", None)
+            img_embeds = None
             if image_path is not None:
-                if not os.path.isabs(image_path):
-                    pass
                 try:
                     img = Image.open(image_path).convert("RGB")
-                    img_tensor = processor.image_processor(img, return_tensors="pt")["pixel_values"][0]
+                    img_tensor = clip_processor(images=img, return_tensors="pt")["pixel_values"][0]
+                    # CLIP embedding extraction will be done in the collator for batch efficiency
                 except Exception as e:
                     print(f"[WARNING] Could not load image {image_path}: {e}")
                     img_tensor = None
             else:
                 img_tensor = None
-            processed = processor(text=prompt, images=img_tensor, return_tensors="pt", padding="max_length", max_length=max_len)
-            input_ids = processed.input_ids[0]
-            attention_mask = processed.attention_mask[0]
-            pixel_values = processed.pixel_values[0] if img_tensor is not None else None
+            processed = tokenizer(prompt, return_tensors="pt", padding="max_length", max_length=max_len, truncation=True)
+            input_ids = processed["input_ids"][0]
+            attention_mask = processed["attention_mask"][0]
             position_ids = torch.arange(len(input_ids)).clamp(max=max_len-1)
             # Labels: mask out everything before answer
-            label_offset = (input_ids == processor.tokenizer.convert_tokens_to_ids("<|latent|>")).nonzero(as_tuple=True)[0].max().item() + 1 if n_latent > 0 else len(q)
+            label_offset = (input_ids == tokenizer.convert_tokens_to_ids("<|latent|>")).nonzero(as_tuple=True)[0].max().item() + 1 if n_latent > 0 else len(q)
             labels = input_ids.clone()
             labels[:label_offset] = -100
             # Also mask <|end-latent|> token(s)
-            end_latent_id = processor.tokenizer.convert_tokens_to_ids("<|end-latent|>")
+            end_latent_id = tokenizer.convert_tokens_to_ids("<|end-latent|>")
             end_latent_positions = (input_ids == end_latent_id).nonzero(as_tuple=True)[0]
             labels[end_latent_positions] = -100
             # Mask unused latent slots (if any)
-            latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
-            latent_positions = (input_ids == latent_id).nonzero(as_tuple=True)[0]
+            latent_id_ = tokenizer.convert_tokens_to_ids("<|latent|>")
+            latent_positions = (input_ids == latent_id_).nonzero(as_tuple=True)[0]
             if len(latent_positions) > n_latent:
                 mask_out = latent_positions[n_latent:]
                 labels[mask_out] = -100
             return {
                 "input_ids":      input_ids,
                 "attention_mask": attention_mask,
-                "pixel_values":   pixel_values,
+                "img_tensor":     img_tensor,
                 "position_ids":   position_ids,
                 "labels":         labels,
                 "idx":            idx
@@ -107,9 +97,11 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
     return ds
 
 class MyCollator:
-    def __init__(self, processor, label_pad_token_id=-100):
-        self.pad_token_id       = processor.tokenizer.pad_token_id
+    def __init__(self, tokenizer, label_pad_token_id=-100, clip_model=None, device=None):
+        self.pad_token_id       = tokenizer.pad_token_id
         self.label_pad_token_id = label_pad_token_id
+        self.clip_model = clip_model
+        self.device = device
     def __call__(self, batch):
         keys = ["input_ids", "attention_mask", "position_ids", "labels"]
         output = {}
@@ -119,6 +111,23 @@ class MyCollator:
             output[key] = torch.nn.utils.rnn.pad_sequence(
                 seqs, batch_first=True, padding_value=pad_val
             )
-        output["pixel_values"] = torch.stack([ex["pixel_values"] for ex in batch if ex["pixel_values"] is not None]) if batch[0]["pixel_values"] is not None else None
+        # Compute CLIP image embeddings in batch if possible
+        img_tensors = [ex["img_tensor"] for ex in batch if ex["img_tensor"] is not None]
+        if len(img_tensors) > 0 and self.clip_model is not None:
+            imgs = torch.stack(img_tensors).to(self.device or "cpu")
+            with torch.no_grad():
+                img_embeds = self.clip_model.get_image_features(pixel_values=imgs)
+            # Map back to batch positions
+            img_embeds_full = []
+            img_idx = 0
+            for ex in batch:
+                if ex["img_tensor"] is not None:
+                    img_embeds_full.append(img_embeds[img_idx])
+                    img_idx += 1
+                else:
+                    img_embeds_full.append(torch.zeros_like(img_embeds[0]))
+            output["img_embeds"] = torch.stack(img_embeds_full)
+        else:
+            output["img_embeds"] = None
         output["idx"] = torch.tensor([ex["idx"] for ex in batch], dtype=torch.long)
         return output

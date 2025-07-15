@@ -22,24 +22,25 @@ torch.backends.cudnn.allow_tf32 = True
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
-from torch.cuda.amp import autocast, GradScaler
-from transformers import LlavaForConditionalGeneration, LlavaProcessor, BitsAndBytesConfig, AutoTokenizer, LlamaTokenizer
+from torch.cuda.amp import autocast
+from transformers import (
+    GPT2LMHeadModel, GPT2Tokenizer, 
+    CLIPModel, CLIPProcessor, BitsAndBytesConfig
+)
 
-def decode_preds(pred_ids, processor):
+def decode_preds(pred_ids, tokenizer):
     if pred_ids.ndim == 2:
         pred_ids = pred_ids[0]
     pred_ids = pred_ids.tolist()
     pred_ids = [i for i in pred_ids if i != -100]
-    return processor.tokenizer.decode(pred_ids, skip_special_tokens=True)
+    return tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 def cleanup_memory():
-    """Clean up GPU memory"""
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
 def print_memory_usage():
-    """Print current GPU memory usage"""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024**3
         reserved = torch.cuda.memory_reserved() / 1024**3
@@ -57,7 +58,7 @@ def main():
     configs.lr = float(configs.lr)
     configs.weight_decay = float(configs.weight_decay)
     configs.resume = int(configs.resume)
-    configs.latent_dim = int(getattr(configs, "latent_dim", 4096))
+    configs.latent_dim = int(getattr(configs, "latent_dim", 1600))
     configs.n_latents = int(getattr(configs, "n_latents", 8))
     configs.latent_lr = float(getattr(configs, "latent_lr", 5e-3))
     configs.e_steps = int(getattr(configs, "e_steps", 2))
@@ -74,143 +75,76 @@ def main():
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    save_dir = "/content/drive/MyDrive/COCONUT/checkpoints/coconut_aokvqa_gunadeep"
+    save_dir = configs.save_path if hasattr(configs, "save_path") else "./checkpoints"
     os.makedirs(save_dir, exist_ok=True)
-    local_ckpt_dir = "/content/checkpoints"
+    local_ckpt_dir = os.path.join("./checkpoints")
     os.makedirs(local_ckpt_dir, exist_ok=True)
 
-    # model & processor - Use direct transformers loading for better compatibility
+    # Model & processor loading
     load_4bit = getattr(configs, "load_4bit", False)
-    use_flash_attention_2 = getattr(configs, "use_flash_attention_2", False)
-    
-    print(f"🔄 Loading model from {configs.model_id}...")
-    
-    # Load processor and tokenizer with fallback options
-    try:
-        print("📝 Loading processor...")
-        # Try loading with minimal parameters for transformers 4.37.2 compatibility
-        processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True)
-        tokenizer = processor.tokenizer
-        print("✅ Processor loaded successfully")
-    except Exception as e:
-        print(f"⚠️  Processor loading failed: {e}")
-        print("🔄 Trying alternative loading method...")
-        try:
-            # Try loading tokenizer separately
-            from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(configs.model_id, trust_remote_code=True)
-            processor = LlavaProcessor.from_pretrained(configs.model_id, trust_remote_code=True)
-            print("✅ Alternative loading successful")
-        except Exception as e2:
-            print(f"❌ Alternative loading also failed: {e2}")
-            print("🔄 Trying final fallback method...")
-            try:
-                # Final fallback: use LlamaTokenizer directly
-                from transformers import LlamaTokenizer
-                tokenizer = LlamaTokenizer.from_pretrained(configs.model_id)
-                # Create a simple processor wrapper for transformers 4.37.2
-                processor = type('SimpleProcessor', (), {
-                    'tokenizer': tokenizer,
-                    'image_processor': type('ImageProcessor', (), {
-                        '__call__': lambda self, img, **kwargs: {'pixel_values': torch.randn(1, 3, 224, 224) if img is not None else None}
-                    })(),
-                    'apply_chat_template': staticmethod(lambda conversation, add_generation_prompt=True: conversation[0]["content"][1]["text"]),
-                    '__call__': lambda self, text=None, images=None, return_tensors=None, padding=None, max_length=None, **kwargs: type('ProcessedOutput', (), {
-                        'input_ids': tokenizer(text, return_tensors=return_tensors, padding=padding or 'do_not_pad', max_length=max_length, **kwargs)['input_ids'],
-                        'attention_mask': tokenizer(text, return_tensors=return_tensors, padding=padding or 'do_not_pad', max_length=max_length, **kwargs)['attention_mask'],
-                        'pixel_values': torch.randn(1, 3, 224, 224) if images is not None else None
-                    })()
-                })()
-                print("✅ Final fallback loading successful")
-            except Exception as e3:
-                print(f"❌ All loading methods failed: {e3}")
-                raise e3
-    
-    # Load model with proper configuration
-    model_kwargs = {
-        "torch_dtype": torch.float16,  # Use float16 for better compatibility
+    model_id = getattr(configs, "model_id", "gpt2-xl")
+    clip_id = getattr(configs, "clip_id", "openai/clip-vit-base-patch32")
+
+    print(f"🔄 Loading GPT-2 from {model_id} ...")
+    gpt2_kwargs = {
+        "torch_dtype": torch.float16,
         "low_cpu_mem_usage": True,
-        "device_map": "auto",
-        "max_memory": {0: "25GB"}  # Very aggressive memory limit
+        "device_map": "auto"
     }
-    
     if load_4bit:
-        print("🔧 Loading model in 4-bit precision...")
-        model_kwargs["load_in_4bit"] = True
-        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+        print("🔧 Loading GPT-2 in 4-bit precision...")
+        gpt2_kwargs["load_in_4bit"] = True
+        gpt2_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4"
         )
-    
-    if use_flash_attention_2:
-        print("🚀 Enabling Flash Attention 2...")
-        model_kwargs["use_flash_attention_2"] = True
-    
-    llava_model = LlavaForConditionalGeneration.from_pretrained(
-        configs.model_id,
-        trust_remote_code=True,
-        **model_kwargs
-    )
+    gpt2 = GPT2LMHeadModel.from_pretrained(model_id, **gpt2_kwargs)
+    tokenizer = GPT2Tokenizer.from_pretrained(model_id)
     special_tokens_dict = {
         "additional_special_tokens": ["<|start-latent|>", "<|latent|>", "<|end-latent|>"]
     }
     tokenizer.add_special_tokens(special_tokens_dict)
-    llava_model.resize_token_embeddings(len(tokenizer))
+    gpt2.resize_token_embeddings(len(tokenizer))
+    print("✅ GPT-2 loaded.")
+
+    print(f"🔄 Loading CLIP from {clip_id} ...")
+    clip = CLIPModel.from_pretrained(clip_id)
+    clip_processor = CLIPProcessor.from_pretrained(clip_id)
+    print("✅ CLIP loaded.")
+
     model = Coconut(
-        model_id=None,  # not used anymore
+        gpt2=gpt2,
+        clip=clip,
         latent_token_id=tokenizer.convert_tokens_to_ids("<|latent|>"),
         start_latent_id=tokenizer.convert_tokens_to_ids("<|start-latent|>"),
         end_latent_id=tokenizer.convert_tokens_to_ids("<|end-latent|>"),
         eos_token_id=tokenizer.eos_token_id
     )
     model = model.to(device)
-    model.processor = processor
-    model.base_causallm = llava_model
-    model.embedding = llava_model.get_input_embeddings()
     print("Model and processor loaded successfully!")
-    # Handle different config structures in transformers 4.37.2
-    try:
-        vision_tower = llava_model.config.vision_tower
-        print("Vision tower config:", vision_tower)
-    except AttributeError:
-        try:
-            vision_tower = llava_model.config.vision_config
-            print("Vision config:", vision_tower)
-        except AttributeError:
-            print("Vision tower: CLIP ViT-L/14 (default for LLaVA-1.5-7B)")
-    print(f"Model type: {type(llava_model)}")
-    print(f"Model device: {next(llava_model.parameters()).device}")
-    print(f"Model parameters: {sum(p.numel() for p in llava_model.parameters()):,}")
+    print(f"Model type: {type(gpt2)}")
+    print(f"Model device: {next(gpt2.parameters()).device}")
+    print(f"Model parameters: {sum(p.numel() for p in gpt2.parameters()):,} (gpt2-xl: 1.5B params, hidden size 1600)")
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    # Disable gradient scaler for better compatibility
     scaler = None
 
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
-    print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
     print_memory_usage()
 
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
-    collator = MyCollator(processor, label_pad_token_id=-100)
+    collator = MyCollator(tokenizer, label_pad_token_id=-100)
 
     n_train = len(train_data)
-    # Handle different config structures in transformers 4.37.2
-    try:
-        hidden_size = model.base_causallm.config.hidden_size
-    except AttributeError:
-        try:
-            hidden_size = model.base_causallm.config.text_config.hidden_size
-        except AttributeError:
-            hidden_size = 4096  # Default for LLaVA-1.5-7B
+    hidden_size = gpt2.config.hidden_size
 
     # Checkpoint handling
     start_epoch = configs.resume
     ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
-    # Initialize metrics CSV
     metrics_csv = os.path.join(save_dir, "metrics.csv")
     if not os.path.exists(metrics_csv):
         with open(metrics_csv, "w", newline="") as f:
@@ -221,17 +155,13 @@ def main():
         print(f"🔁 Resuming from checkpoint: {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model"])
-        if "ema_model" in ckpt:
-            ema_model.load_state_dict(ckpt["ema_model"])
         optimizer.load_state_dict(ckpt["optimizer"])
-        scaler.load_state_dict(ckpt["scaler"])
         all_latents = ckpt["latents"].to(device).detach().requires_grad_(True)
         start_epoch = ckpt["epoch"]
     else:
         all_latents = torch.randn(n_train, configs.n_latents, hidden_size, requires_grad=True, device=device)
 
     latent_optimizer = optim.Adam([all_latents], lr=configs.latent_lr)
-    # Remove the earlier optimizer and scaler initialization (if present)
 
     patience = 8
     best_val = float("inf")
@@ -242,7 +172,6 @@ def main():
     train_losses, val_losses, accuracies, token_counts = [], [], [], []
     printed_checkpoint_reminder = False
     prev_best_ckpt = None
-    # Curriculum learning setup
     max_latent_stage = getattr(configs, "max_latent_stage", 7)
     epochs_per_stage = getattr(configs, "epochs_per_stage", 4)
     for epoch in range(start_epoch, configs.num_epochs):
@@ -251,13 +180,13 @@ def main():
         print(f"\n=== Epoch {epoch+1}/{configs.num_epochs} | Stage {stage} | n_latents {n_latents} ===")
         epoch_start = time.time()
 
-        # Update configs for this stage
         configs.n_latents = n_latents
         train_ds = get_cot_latent_dataset(train_data, stage, configs,
-                                          processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
-                                          processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-                                          processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"),
-                                          processor)
+                                          tokenizer.convert_tokens_to_ids("<|start-latent|>"),
+                                          tokenizer.convert_tokens_to_ids("<|latent|>"),
+                                          tokenizer.convert_tokens_to_ids("<|end-latent|>"),
+                                          tokenizer,
+                                          clip_processor)
         loader = DataLoader(
             train_ds,
             batch_size=configs.batch_size_training,
@@ -269,8 +198,6 @@ def main():
         model.train()
         total_loss = 0.0
         pbar = tqdm(loader, desc="Training", leave=False, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
-        
-        # Gradient accumulation setup
         gradient_accumulation_steps = getattr(configs, "gradient_accumulation_steps", 1)
         optimizer.zero_grad()
 
@@ -289,47 +216,38 @@ def main():
                         input_ids=batch["input_ids"],
                         position_ids=batch.get("position_ids"),
                         attention_mask=batch["attention_mask"],
-                        pixel_values=batch.get("pixel_values"),
+                        img_embeds=batch.get("img_embeds"),
                         labels=labels,
                         latents=Z
                     )
                     loss_z = outputs.loss
                 loss_z.backward(retain_graph=(e_step < configs.e_steps - 1))
                 latent_optimizer.step()
-                cleanup_memory()  # Clean up after each E-step
+                cleanup_memory()
             all_latents.requires_grad = False
             model.train()
             optimizer.zero_grad()
-            # Use fresh latents for M-step to avoid graph reuse
             Z_mstep = all_latents[idxs].detach().requires_grad_(False)
             with autocast(dtype=torch.float16):
                 outputs = model(
                     input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),
                     attention_mask=batch["attention_mask"],
-                    pixel_values=batch.get("pixel_values"),
+                    img_embeds=batch.get("img_embeds"),
                     labels=batch["labels"],
                     latents=Z_mstep
                 )
                 loss_m = outputs.loss
-            # Scale loss for gradient accumulation
             scaled_loss = loss_m / gradient_accumulation_steps
             scaled_loss.backward()
-            
-            # Gradient accumulation step
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 optimizer.zero_grad()
-                
-                # Update EMA model
                 with torch.no_grad():
                     for param, ema_param in zip(model.parameters(), ema_model.parameters()):
                         ema_param.data = ema_decay * ema_param.data + (1 - ema_decay) * param.data
-                
-                # Clean up memory after gradient step
                 cleanup_memory()
-            
             total_loss += loss_m.item()
             all_latents.requires_grad = True
             pbar.set_postfix(train_loss=loss_m.item())
@@ -340,10 +258,11 @@ def main():
 
         model.eval()
         val_ds = get_cot_latent_dataset(val_data, stage, configs,
-                                        processor.tokenizer.convert_tokens_to_ids("<|start-latent|>"),
-                                        processor.tokenizer.convert_tokens_to_ids("<|latent|>"),
-                                        processor.tokenizer.convert_tokens_to_ids("<|end-latent|>"),
-                                        processor)
+                                        tokenizer.convert_tokens_to_ids("<|start-latent|>"),
+                                        tokenizer.convert_tokens_to_ids("<|latent|>"),
+                                        tokenizer.convert_tokens_to_ids("<|end-latent|>"),
+                                        tokenizer,
+                                        clip_processor)
         val_loader = DataLoader(
             val_ds,
             batch_size=1,
@@ -356,8 +275,7 @@ def main():
         tsne_labels = []
         gen_token_counts = []
         sample_preds = []
-        # Select 4 fixed validation samples for latent trajectory tracking
-        fixed_traj_indices = [12, 45, 78, 101]  # <-- Use 4 chosen indices
+        fixed_traj_indices = [12, 45, 78, 101]
         if epoch == 0:
             wandb.config.update({"latent_traj_indices": fixed_traj_indices}, allow_val_change=True)
         else:
@@ -375,14 +293,13 @@ def main():
                     input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),
                     attention_mask=batch["attention_mask"],
-                    pixel_values=batch.get("pixel_values"),
+                    img_embeds=batch.get("img_embeds"),
                     labels=batch["labels"],
                     latents=Z
                 )
                 loss = out.loss
-                # t-SNE collection (unchanged)
                 if out.inputs_embeds is not None and len(tsne_embeds) < 100:
-                    latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                    latent_id = tokenizer.convert_tokens_to_ids("<|latent|>")
                     latent_mask = (batch["input_ids"] == latent_id)
                     for b in range(out.inputs_embeds.shape[0]):
                         latent_embeds = out.inputs_embeds[b][latent_mask[b]].detach().cpu().numpy()
@@ -390,9 +307,8 @@ def main():
                             tsne_embeds.append(latent_embeds.mean(axis=0))
                             tsne_labels.append(val_data[idxs[b].item()]["answer"])
                 vloss += loss.item()
-                # --- Token counting logic for COCONUT ---
                 input_ids = batch["input_ids"][0].tolist()
-                latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                latent_id = tokenizer.convert_tokens_to_ids("<|latent|>")
                 try:
                     last_latent_idx = max(i for i, t in enumerate(input_ids) if t == latent_id)
                     answer_start = last_latent_idx + 1
@@ -400,12 +316,11 @@ def main():
                     answer_start = 0
                 preds = out.logits.argmax(-1)
                 pred_answer_ids = preds[0][answer_start:]
-                output_text = processor.tokenizer.decode(pred_answer_ids, skip_special_tokens=True)
-                num_gen_tokens = len(processor.tokenizer.encode(output_text, add_special_tokens=False))
+                output_text = decode_preds(pred_answer_ids, tokenizer)
+                num_gen_tokens = len(tokenizer.encode(output_text, add_special_tokens=False))
                 total_gen_tokens += num_gen_tokens
                 gen_token_counts.append(num_gen_tokens)
                 num_samples += 1
-                # --- Answer-level accuracy with index-to-label mapping ---
                 question_str = val_data[idxs[0].item()]["question"]
                 gt_index = int(val_data[idxs[0].item()]["answer"])
                 if "The choices are" in question_str:
@@ -425,13 +340,11 @@ def main():
                 if normalize(output_text) == normalize(gt_answer):
                     exact_matches += 1
                 vbar.set_postfix(val_loss=loss.item())
-                # Collect sample predictions for W&B logging (up to 10 random samples)
                 if len(sample_preds) < 10:
                     image_path = val_data[idxs[0].item()].get("image", "")
-                    # For COCONUT, log mean latent vector as a string (optional, for interpretability)
                     mean_latent = None
                     if out.inputs_embeds is not None:
-                        latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                        latent_id = tokenizer.convert_tokens_to_ids("<|latent|>")
                         latent_mask = (batch["input_ids"] == latent_id)
                         latent_embeds = out.inputs_embeds[0][latent_mask[0]].detach().cpu().numpy()
                         if latent_embeds.shape[0] > 0:
@@ -440,13 +353,12 @@ def main():
                         "question": question_str,
                         "ground_truth": gt_answer,
                         "prediction": output_text.strip(),
-                        "image_path": image_path,  # This is the path from the dataset (Drive or local)
+                        "image_path": image_path,
                         "mean_latent": str(mean_latent) if mean_latent is not None else ""
                     })
-                # For latent trajectory logging: collect mean latent for fixed samples
                 idx_val = idxs[0].item()
                 if idx_val in fixed_traj_indices and out.inputs_embeds is not None:
-                    latent_id = processor.tokenizer.convert_tokens_to_ids("<|latent|>")
+                    latent_id = tokenizer.convert_tokens_to_ids("<|latent|>")
                     latent_mask = (batch["input_ids"] == latent_id)
                     latent_embeds = out.inputs_embeds[0][latent_mask[0]].detach().cpu().numpy()
                     if latent_embeds.shape[0] > 0:
@@ -454,7 +366,6 @@ def main():
                         if idx_val not in latent_traj_dict:
                             latent_traj_dict[idx_val] = []
                         latent_traj_dict[idx_val].append(mean_latent)
-        # Histogram of generated token counts
         if len(gen_token_counts) > 0:
             fig_hist, ax_hist = plt.subplots()
             ax_hist.hist(gen_token_counts, bins=20, color='skyblue', edgecolor='black')
@@ -484,7 +395,6 @@ def main():
                 "model": model.state_dict(),
                 "ema_model": ema_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "scaler": scaler.state_dict(),
                 "latents": all_latents,
                 "epoch": epoch+1
             }, best_ckpt)
@@ -505,14 +415,13 @@ def main():
             "model": model.state_dict(),
             "ema_model": ema_model.state_dict(),
             "optimizer": optimizer.state_dict(),
-            "scaler": scaler.state_dict(),
             "latents": all_latents,
             "epoch": epoch+1
         }, ckpt)
         wandb.save(ckpt, base_path=local_ckpt_dir)
         if not printed_checkpoint_reminder:
             print(f"[INFO] To keep a specific checkpoint (e.g., {ckpt_name}), copy it to Drive before your Colab session ends:")
-            print(f"!cp /content/checkpoints/{ckpt_name} {save_dir}/")
+            print(f"!cp ./checkpoints/{ckpt_name} {save_dir}/")
             printed_checkpoint_reminder = True
         fig = plt.figure()
         plt.plot(train_losses, label="train")
@@ -522,7 +431,6 @@ def main():
         wandb.log({f"loss_plot_{epoch+1}": wandb.Image(fig)})
         plt.close(fig)
         print(f"⏱ Epoch time: {(time.time() - epoch_start)/60:.2f} mins")
-        # t-SNE visualization and W&B logging
         if len(tsne_embeds) > 5:
             tsne = TSNE(n_components=2, random_state=42)
             tsne_proj = tsne.fit_transform(np.stack(tsne_embeds))
@@ -533,27 +441,22 @@ def main():
             ax.set_title(f"t-SNE of Latent-Conditioned Embeddings (Epoch {epoch+1})")
             wandb.log({"tsne_latent_embeds": wandb.Image(fig)})
             plt.close(fig)
-        # Log sample predictions to W&B as a table (Coconut only)
-        # Note: Reasoning steps are not logged for COCONUT, since the model reasons in latent space, not explicit text.
         if len(sample_preds) > 0:
             columns = ["question", "ground_truth", "prediction", "image_path", "mean_latent"]
             table = wandb.Table(columns=columns)
             for row in sample_preds:
                 table.add_data(row["question"], row["ground_truth"], row["prediction"], row["image_path"], row["mean_latent"])
             wandb.log({"sample_predictions": table})
-        # At the END of each stage, plot latent trajectories for tracked samples (using t-SNE instead of UMAP)
         if (epoch + 1) % epochs_per_stage == 0 and len(latent_traj_dict) > 0:
-            # Stack all mean latents for all tracked samples
-            all_latents = []
+            all_latents_traj = []
             sample_ids = []
             for idx, traj in latent_traj_dict.items():
-                all_latents.extend(traj)
+                all_latents_traj.extend(traj)
                 sample_ids.extend([idx]*len(traj))
-            if len(all_latents) > 0:
+            if len(all_latents_traj) > 0:
                 try:
-                    # Use t-SNE for dimensionality reduction (no additional dependencies needed)
-                    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(all_latents)-1))
-                    tsne_proj = tsne.fit_transform(np.stack(all_latents))
+                    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(all_latents_traj)-1))
+                    tsne_proj = tsne.fit_transform(np.stack(all_latents_traj))
                     fig_traj, ax_traj = plt.subplots(figsize=(7, 6))
                     color_map = plt.cm.get_cmap('tab10', len(latent_traj_dict))
                     offset = 0
@@ -568,11 +471,8 @@ def main():
                     plt.close(fig_traj)
                 except Exception as e:
                     print(f"[WARNING] Could not create latent trajectory plot: {e}")
-            # Save for next epoch
             main.latent_traj_dict = latent_traj_dict
     wandb_run.finish()
-
-    # Save tokenizer with special tokens for future inference
     tokenizer.save_pretrained(os.path.join(local_ckpt_dir, "tokenizer"))
     tokenizer.save_pretrained(save_dir)
 
