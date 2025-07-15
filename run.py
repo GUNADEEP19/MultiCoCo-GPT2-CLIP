@@ -38,6 +38,14 @@ def cleanup_memory():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
+def print_memory_usage():
+    """Print current GPU memory usage"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {total:.2f}GB total")
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", help="Path to YAML config")
@@ -123,7 +131,7 @@ def main():
         "torch_dtype": torch.bfloat16 if getattr(configs, "bf16", False) else torch.float16,
         "low_cpu_mem_usage": True,
         "device_map": "auto",
-        "max_memory": {0: "30GB"}  # More aggressive memory limit
+        "max_memory": {0: "25GB"}  # Very aggressive memory limit
     }
     
     if load_4bit:
@@ -181,6 +189,7 @@ def main():
 
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
     print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
+    print_memory_usage()
 
     train_data = get_dataset(configs.train_path)
     val_data = get_dataset(configs.val_path)
@@ -289,6 +298,7 @@ def main():
                     loss_z = outputs.loss
                 loss_z.backward()
                 latent_optimizer.step()
+                cleanup_memory()  # Clean up after each E-step
             all_latents.requires_grad = False
             model.train()
             optimizer.zero_grad()
