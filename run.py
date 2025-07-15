@@ -14,6 +14,11 @@ from torch.utils.data import DataLoader
 from tqdm.notebook import tqdm
 import copy
 
+# Memory optimization settings
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 from coconut import Coconut
 from dataset import get_cot_latent_dataset, MyCollator, get_dataset
 from utils import Config, set_seed
@@ -26,6 +31,12 @@ def decode_preds(pred_ids, processor):
     pred_ids = pred_ids.tolist()
     pred_ids = [i for i in pred_ids if i != -100]
     return processor.tokenizer.decode(pred_ids, skip_special_tokens=True)
+
+def cleanup_memory():
+    """Clean up GPU memory"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -112,7 +123,7 @@ def main():
         "torch_dtype": torch.bfloat16 if getattr(configs, "bf16", False) else torch.float16,
         "low_cpu_mem_usage": True,
         "device_map": "auto",
-        "max_memory": {0: "35GB"}  # Reserve some memory for training
+        "max_memory": {0: "30GB"}  # More aggressive memory limit
     }
     
     if load_4bit:
@@ -308,6 +319,9 @@ def main():
                 with torch.no_grad():
                     for param, ema_param in zip(model.parameters(), ema_model.parameters()):
                         ema_param.data = ema_decay * ema_param.data + (1 - ema_decay) * param.data
+                
+                # Clean up memory after gradient step
+                cleanup_memory()
             
             total_loss += loss_m.item()
             all_latents.requires_grad = True

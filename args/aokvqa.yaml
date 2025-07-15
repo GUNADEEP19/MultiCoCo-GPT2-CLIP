@@ -28,8 +28,8 @@ e_steps: 3                # Number of E-step optimization steps per batch
 
 # 🏋️ Training configs for Colab Free Tier
 num_epochs: 28
-batch_size_training: 8          # Reduced for memory constraints
-gradient_accumulation_steps: 6  # Effective batch size = 8 * 6 = 48
+batch_size_training: 2          # Very small batch size for memory
+gradient_accumulation_steps: 24 # Effective batch size = 2 * 24 = 48
 lr: 1e-4
 weight_decay: 0.0
 
@@ -37,6 +37,6 @@ weight_decay: 0.0
 # load_4bit: true              # 4-bit quantization (requires bitsandbytes)
 # use_flash_attention_2: true  # Flash Attention 2 (requires flash-attn)
 
-max_length: 384  # Balanced: sufficient for 95% of data, saves memory vs 512
+max_length: 256  # Reduced for memory constraints - we can increase later
 max_latent_stage: 7           # Curriculum: number of latent stages
 epochs_per_stage: 4           # Curriculum: epochs per stage
