@@ -128,7 +128,7 @@ def main():
     
     # Load model with proper configuration
     model_kwargs = {
-        "torch_dtype": torch.bfloat16 if getattr(configs, "bf16", False) else torch.float16,
+        "torch_dtype": torch.float16,  # Use float16 for better compatibility
         "low_cpu_mem_usage": True,
         "device_map": "auto",
         "max_memory": {0: "25GB"}  # Very aggressive memory limit
@@ -283,9 +283,7 @@ def main():
             for e_step in range(configs.e_steps):
                 latent_optimizer.zero_grad()
                 labels = batch["labels"]
-                use_bf16 = getattr(configs, "bf16", False)
-                autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
-                with autocast(dtype=autocast_dtype):
+                with autocast(dtype=torch.float16):
                     outputs = model(
                         input_ids=batch["input_ids"],
                         position_ids=batch.get("position_ids"),
@@ -303,9 +301,7 @@ def main():
             optimizer.zero_grad()
             # Use fresh latents for M-step to avoid graph reuse
             Z_mstep = all_latents[idxs].detach().requires_grad_(False)
-            use_bf16 = getattr(configs, "bf16", False)
-            autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
-            with autocast(dtype=autocast_dtype):
+            with autocast(dtype=torch.float16):
                 outputs = model(
                     input_ids=batch["input_ids"],
                     position_ids=batch.get("position_ids"),
