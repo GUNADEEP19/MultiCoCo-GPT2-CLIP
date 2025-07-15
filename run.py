@@ -280,9 +280,10 @@ def main():
             idxs = batch["idx"]
             Z = all_latents[idxs]
             model.eval()
-            for _ in range(configs.e_steps):
+            for e_step in range(configs.e_steps):
                 latent_optimizer.zero_grad()
-                # inject_latents logic can be adapted if needed
+                # Use fresh latents for each E-step to avoid graph reuse
+                Z_fresh = all_latents[idxs].detach().requires_grad_(True)
                 labels = batch["labels"]
                 use_bf16 = getattr(configs, "bf16", False)
                 autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
@@ -293,10 +294,12 @@ def main():
                         attention_mask=batch["attention_mask"],
                         pixel_values=batch.get("pixel_values"),
                         labels=labels,
-                        latents=Z
+                        latents=Z_fresh
                     )
                     loss_z = outputs.loss
                 loss_z.backward()
+                # Update the original latents with gradients from fresh computation
+                all_latents[idxs] = Z_fresh.detach().requires_grad_(True)
                 latent_optimizer.step()
                 cleanup_memory()  # Clean up after each E-step
             all_latents.requires_grad = False
