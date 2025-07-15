@@ -41,9 +41,12 @@ class Coconut(nn.Module):
         Returns: input_embeds (batch, seq_len, hidden_size)
         """
         device = self.embedding.weight.device
+        dtype = self.embedding.weight.dtype
         input_embeds = self.embedding(input_ids.to(device))
         batch_size, seq_len = input_ids.shape
         latent_token_id = self.latent_token_id
+        # Ensure latents are on the same device and dtype as embeddings
+        latents = latents.to(device=device, dtype=dtype)
         for b in range(batch_size):
             latent_positions = (input_ids[b] == latent_token_id).nonzero(as_tuple=True)[0]
             n_lat = min(len(latent_positions), latents.shape[1])
