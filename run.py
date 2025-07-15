@@ -139,7 +139,7 @@ def main():
         model_kwargs["load_in_4bit"] = True
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4"
         )
@@ -185,7 +185,8 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in llava_model.parameters()):,}")
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
-    scaler = GradScaler()
+    # Disable gradient scaler for better compatibility
+    scaler = None
 
     print(f"[DEBUG] Model embedding on device: {next(model.embedding.parameters()).device}")
     print("[INFO] For A100 GPU, consider increasing batch_size_training in your YAML config for best performance.")
@@ -313,13 +314,12 @@ def main():
                 loss_m = outputs.loss
             # Scale loss for gradient accumulation
             scaled_loss = loss_m / gradient_accumulation_steps
-            scaler.scale(scaled_loss).backward()
+            scaled_loss.backward()
             
             # Gradient accumulation step
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad()
                 
                 # Update EMA model
