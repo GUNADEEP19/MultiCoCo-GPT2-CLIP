@@ -301,6 +301,8 @@ def main():
             all_latents.requires_grad = False
             model.train()
             optimizer.zero_grad()
+            # Use fresh latents for M-step to avoid graph reuse
+            Z_mstep = all_latents[idxs].detach().requires_grad_(False)
             use_bf16 = getattr(configs, "bf16", False)
             autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
             with autocast(dtype=autocast_dtype):
@@ -310,7 +312,7 @@ def main():
                     attention_mask=batch["attention_mask"],
                     pixel_values=batch.get("pixel_values"),
                     labels=batch["labels"],
-                    latents=Z
+                    latents=Z_mstep
                 )
                 loss_m = outputs.loss
             # Scale loss for gradient accumulation
