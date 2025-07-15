@@ -111,7 +111,8 @@ def main():
     model_kwargs = {
         "torch_dtype": torch.bfloat16 if getattr(configs, "bf16", False) else torch.float16,
         "low_cpu_mem_usage": True,
-        "device_map": "auto"
+        "device_map": "auto",
+        "max_memory": {0: "35GB"}  # Reserve some memory for training
     }
     
     if load_4bit:
@@ -247,8 +248,12 @@ def main():
         model.train()
         total_loss = 0.0
         pbar = tqdm(loader, desc="Training", leave=False, bar_format="{l_bar}{n_fmt}/{total_fmt} [{percentage:3.0f}%]")
+        
+        # Gradient accumulation setup
+        gradient_accumulation_steps = getattr(configs, "gradient_accumulation_steps", 1)
+        optimizer.zero_grad()
 
-        for batch in pbar:
+        for batch_idx, batch in enumerate(pbar):
             for k in batch:
                 if isinstance(batch[k], torch.Tensor):
                     batch[k] = batch[k].to(device)
@@ -288,13 +293,22 @@ def main():
                     latents=Z
                 )
                 loss_m = outputs.loss
-            scaler.scale(loss_m).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            with torch.no_grad():
-                for param, ema_param in zip(model.parameters(), ema_model.parameters()):
-                    ema_param.data = ema_decay * ema_param.data + (1 - ema_decay) * param.data
+            # Scale loss for gradient accumulation
+            scaled_loss = loss_m / gradient_accumulation_steps
+            scaler.scale(scaled_loss).backward()
+            
+            # Gradient accumulation step
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                
+                # Update EMA model
+                with torch.no_grad():
+                    for param, ema_param in zip(model.parameters(), ema_model.parameters()):
+                        ema_param.data = ema_decay * ema_param.data + (1 - ema_decay) * param.data
+            
             total_loss += loss_m.item()
             all_latents.requires_grad = True
             pbar.set_postfix(train_loss=loss_m.item())
