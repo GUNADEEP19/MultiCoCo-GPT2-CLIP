@@ -42,9 +42,9 @@ python coconut/run.py coconut/args/aokvqa.yaml
 - Example configs: `aokvqa.yaml`, `scienceqa.yaml`
 
 ## Model Structure
-- `coconut/coconut.py`: Model definition (Coconut class)
-- `coconut/dataset.py`: Dataset loading and preprocessing
-- `coconut/run.py`: Training and evaluation loop
+- `coconut.py`: Model definition (Coconut class)
+- `dataset.py`: Dataset loading and preprocessing
+- `run.py`: Training and evaluation loop
 
 ## Visualization
 - The code supports t-SNE plots and sample predictions for analysis.
