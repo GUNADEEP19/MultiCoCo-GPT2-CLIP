@@ -51,8 +51,5 @@ python coconut/run.py coconut/args/aokvqa.yaml
 - Plots and tables are logged using wandb (optional, can be disabled if not needed).
 
 ## Notes
-- This codebase is intended for research and educational purposes.
+- This Codebase is intended for Research and Educational purposes.
 - For best results, use a GPU with sufficient memory (gpt2-xl and CLIP are large models).
-
-## License
-See `coconut/LICENSE` for license information. 
