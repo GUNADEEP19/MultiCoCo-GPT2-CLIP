@@ -1,0 +1,21 @@
+# CoCoNuT (Latent Curriculum) Training Config
+project: multicoco-coconut
+name: multicoco-coconut-stage1plus
+model_id: gpt2-xl
+clip_id: openai/clip-vit-base-patch32
+train_path: data/Datasets/A-OKVQA/aokvqa_train.json
+val_path: data/Datasets/A-OKVQA/aokvqa_validation.json
+save_path: checkpoints/coconut_aokvqa
+batch_size_training: 4
+batch_size_eval: 4
+num_epochs: 20
+lr: 2e-5
+weight_decay: 0.01
+seed: 42
+resume: 0
+max_length: 256
+# CoCoNuT-specific
+c_thought: 2
+max_latent_stage: 4
+epochs_per_stage: 4
+load_model_path: checkpoints/cot_aokvqa/best_cot.pt 

@@ -1,0 +1,16 @@
+# CoT (Stage 0) Training Config
+project: multicoco-cot
+name: multicoco-cot-stage0
+model_id: gpt2-xl
+clip_id: openai/clip-vit-base-patch32
+train_path: data/Datasets/A-OKVQA/aokvqa_train.json
+val_path: data/Datasets/A-OKVQA/aokvqa_validation.json
+save_path: checkpoints/cot_aokvqa
+batch_size_training: 4
+batch_size_eval: 4
+num_epochs: 10
+lr: 2e-5
+weight_decay: 0.01
+seed: 42
+resume: 0
+max_length: 256 

@@ -1,0 +1,30 @@
+# ==========================
+# CoT (Stage 0) Training Config
+# ==========================
+# Use this config for standard Chain-of-Thought (CoT) training.
+# The model is trained on (image, question, steps, answer) with NO latent tokens.
+# Use with run_cot.py
+
+project: multicoco-cot                # W&B project name
+name: multicoco-cot-stage0            # W&B run name
+model_id: gpt2-xl                     # Huggingface model name for GPT-2
+clip_id: openai/clip-vit-base-patch32 # Huggingface model name for CLIP
+
+# === Data paths ===
+train_path: data/Datasets/A-OKVQA/aokvqa_train.json
+val_path: data/Datasets/A-OKVQA/aokvqa_validation.json
+
+# === Checkpointing ===
+save_path: checkpoints/cot_aokvqa     # Where to save checkpoints
+
+# === Training hyperparameters ===
+batch_size_training: 4
+batch_size_eval: 4
+num_epochs: 10
+lr: 2e-5
+weight_decay: 0.01
+seed: 42
+resume: 0
+max_length: 256                       # Max sequence length for GPT-2
+
+# No latent or curriculum settings needed for CoT! 

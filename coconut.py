@@ -107,4 +107,4 @@ class Coconut(nn.Module):
 def update_ema(model, ema_model, decay=0.999):
     with torch.no_grad():
         for param, ema_param in zip(model.parameters(), ema_model.parameters()):
-            ema_param.data.mul_(decay).add_(param.data, alpha=1 - decay)
+            ema_param.data.mul_(decay).add_(param.data, alpha=1 - decay) 

@@ -96,6 +96,40 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
         return torch.utils.data.Subset(ds, perm)
     return ds
 
+def get_cot_dataset(base_dataset, configs, tokenizer, clip_processor):
+    max_len = getattr(configs, "max_length", 256)
+    class CoTDataset(Dataset):
+        def __len__(self): return len(base_dataset)
+        def __getitem__(self, idx):
+            ex = base_dataset[idx]
+            q = ex["question"]
+            s = ex["steps"]
+            a = ex["answer"]
+            prompt = q + " " + " ".join(s) + " " + a
+            image_path = ex.get("image", None)
+            img_tensor = None
+            if image_path is not None:
+                try:
+                    img = Image.open(image_path).convert("RGB")
+                    img_tensor = clip_processor(images=img, return_tensors="pt")["pixel_values"][0]
+                except Exception as e:
+                    print(f"[WARNING] Could not load image {image_path}: {e}")
+                    img_tensor = None
+            processed = tokenizer(prompt, return_tensors="pt", padding="max_length", max_length=max_len, truncation=True)
+            input_ids = processed["input_ids"][0]
+            attention_mask = processed["attention_mask"][0]
+            position_ids = torch.arange(len(input_ids)).clamp(max=max_len-1)
+            labels = input_ids.clone()
+            return {
+                "input_ids":      input_ids,
+                "attention_mask": attention_mask,
+                "img_tensor":     img_tensor,
+                "position_ids":   position_ids,
+                "labels":         labels,
+                "idx":            idx
+            }
+    return CoTDataset()
+
 class MyCollator:
     def __init__(self, tokenizer, label_pad_token_id=-100, clip_model=None, device=None):
         self.pad_token_id       = tokenizer.pad_token_id

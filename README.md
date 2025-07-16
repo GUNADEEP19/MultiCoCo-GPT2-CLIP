@@ -31,7 +31,7 @@ pip install -r coconut/requirements.txt
 ## Training
 Run training with a config file (YAML):
 ```bash
-python coconut/run.py coconut/args/aokvqa.yaml
+python run.py args/aokvqa.yaml
 ```
 
 - Checkpoints and metrics will be saved to the path specified in the config file.
