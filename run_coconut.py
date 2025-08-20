@@ -105,6 +105,31 @@ def main():
     model = model.to(device)
     print("Model and processor loaded successfully!")
 
+    # Optionally load a pretrained CoT checkpoint to initialize CoCoNuT
+    load_model_path = getattr(configs, "load_model_path", None)
+    if load_model_path and os.path.exists(load_model_path):
+        print(f"Loading pretrained CoT checkpoint from: {load_model_path}")
+        ckpt = torch.load(load_model_path, map_location="cpu")
+        state = ckpt.get("model", ckpt)
+        model_state = model.state_dict()
+        filtered = {}
+        num_total = 0
+        num_loaded = 0
+        for k, v in state.items():
+            # Only load overlapping keys with identical shapes
+            if k in model_state and model_state[k].shape == v.shape:
+                filtered[k] = v
+                num_loaded += 1
+            num_total += 1
+        missing, unexpected = model.load_state_dict(filtered, strict=False)
+        print(f"Loaded {num_loaded} parameter tensors from CoT checkpoint (out of {num_total}).")
+        if missing:
+            print(f"Missing keys (not loaded): {len(missing)}")
+        if unexpected:
+            print(f"Unexpected keys (ignored): {len(unexpected)}")
+    elif load_model_path:
+        print(f"[WARNING] load_model_path not found: {load_model_path}")
+
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
 
     train_data = get_dataset(configs.train_path)

@@ -34,8 +34,12 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
         def __getitem__(self, idx):
             ex = base_dataset[idx]
             total_steps = len(ex["steps"]) if ex.get("steps") else 0
-            n_latent = min(getattr(configs, "n_latents", 8), total_steps)  # gpt2-xl default
-            remaining_steps = ex["steps"][n_latent:] if total_steps > n_latent else []
+            # Number of reasoning steps to replace in this stage
+            n_steps_replaced = min(getattr(configs, "n_latents", 8), total_steps)
+            # Number of latent tokens per replaced step (continuous thoughts)
+            c_thought = int(getattr(configs, "c_thought", 1))
+            n_latent_tokens = n_steps_replaced * c_thought
+            remaining_steps = ex["steps"][n_steps_replaced:] if total_steps > n_steps_replaced else []
             q = ex["question"]
             s = ex["steps"]
             a = ex["answer"]
@@ -43,10 +47,9 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             question_with_latents = q
             if not no_special_marker:
                 question_with_latents += " <|start-latent|>"
-            question_with_latents += " " + "<|latent|> " * n_latent
-            max_latents = getattr(configs, "n_latents", 8)  # gpt2-xl default
-            if n_latent < max_latents:
-                question_with_latents += "<|latent|> " * (max_latents - n_latent)
+            # Insert k * c_thought latent tokens
+            if n_latent_tokens > 0:
+                question_with_latents += " " + ("<|latent|> " * n_latent_tokens)
             if not no_special_marker:
                 question_with_latents += "<|end-latent|> "
             question_with_latents += " " + " ".join(remaining_steps)
@@ -69,7 +72,7 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             attention_mask = processed["attention_mask"][0]
             position_ids = torch.arange(len(input_ids)).clamp(max=max_len-1)
             # Labels: mask out everything before answer
-            label_offset = (input_ids == tokenizer.convert_tokens_to_ids("<|latent|>")).nonzero(as_tuple=True)[0].max().item() + 1 if n_latent > 0 else len(q)
+            label_offset = (input_ids == tokenizer.convert_tokens_to_ids("<|latent|>")).nonzero(as_tuple=True)[0].max().item() + 1 if n_latent_tokens > 0 else len(q)
             labels = input_ids.clone()
             labels[:label_offset] = -100
             # Also mask <|end-latent|> token(s)
@@ -79,8 +82,8 @@ def get_cot_latent_dataset(base_dataset, scheduled_stage, configs,
             # Mask unused latent slots (if any)
             latent_id_ = tokenizer.convert_tokens_to_ids("<|latent|>")
             latent_positions = (input_ids == latent_id_).nonzero(as_tuple=True)[0]
-            if len(latent_positions) > n_latent:
-                mask_out = latent_positions[n_latent:]
+            if len(latent_positions) > n_latent_tokens:
+                mask_out = latent_positions[n_latent_tokens:]
                 labels[mask_out] = -100
             return {
                 "input_ids":      input_ids,
