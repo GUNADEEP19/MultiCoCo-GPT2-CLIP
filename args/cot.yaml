@@ -7,7 +7,7 @@
 
 project: multicoco-cot                # W&B project name
 name: multicoco-cot-stage0            # W&B run name
-model_id: gpt2-xl                     # Huggingface model name for GPT-2
+model_id: gpt2-large                  # Huggingface model name for GPT-2 (A100 friendly)
 clip_id: openai/clip-vit-base-patch32 # Huggingface model name for CLIP
 
 # === Data paths ===
@@ -20,11 +20,15 @@ save_path: checkpoints/cot_aokvqa     # Where to save checkpoints
 # === Training hyperparameters ===
 batch_size_training: 4
 batch_size_eval: 4
-num_epochs: 10
+num_epochs: 5                         # Quick training for baseline
 lr: 2e-5
 weight_decay: 0.01
 seed: 42
 resume: 0
 max_length: 256                       # Max sequence length for GPT-2
+
+# === Colab A100 Optimization ===
+# load_4bit: false                    # Uncomment if using gpt2-xl for memory
+# model_id: gpt2-xl                   # Uncomment for larger model
 
 # No latent or curriculum settings needed for CoT! 

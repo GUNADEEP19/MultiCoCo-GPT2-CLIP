@@ -55,8 +55,14 @@ def main():
     set_seed(configs.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    save_dir = configs.save_path if hasattr(configs, "save_path") else "./checkpoints"
-    os.makedirs(save_dir, exist_ok=True)
+    # Save to both main checkpoint directory and Colab disk storage
+    save_path = configs.save_path if hasattr(configs, "save_path") else "./checkpoints"
+    os.makedirs(save_path, exist_ok=True)
+    
+    # Also save to a local colab directory for easy download
+    colab_save_dir = "./colab_checkpoints/coconut"
+    os.makedirs(colab_save_dir, exist_ok=True)
+    
     local_ckpt_dir = os.path.join("./checkpoints")
     os.makedirs(local_ckpt_dir, exist_ok=True)
 
@@ -129,6 +135,7 @@ def main():
             print(f"Unexpected keys (ignored): {len(unexpected)}")
     elif load_model_path:
         print(f"[WARNING] load_model_path not found: {load_model_path}")
+        print("Training CoCoNuT from scratch without CoT initialization!")
 
     optimizer = optim.AdamW(model.parameters(), lr=configs.lr, weight_decay=configs.weight_decay)
 
@@ -141,7 +148,7 @@ def main():
 
     # Checkpoint handling
     start_epoch = configs.resume
-    ckpt_path = os.path.join(save_dir, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
+    ckpt_path = os.path.join(save_path, f"checkpoint_{start_epoch}.pt") if start_epoch > 0 else None
 
     if ckpt_path and os.path.exists(ckpt_path):
         print(f"Resuming from checkpoint: {ckpt_path}")
@@ -228,15 +235,24 @@ def main():
         avg_val_loss = val_loss / len(val_loader)
         print(f"Epoch {epoch+1} avg val loss: {avg_val_loss:.4f}")
 
-        # Save best model
+        # Save best model to both locations
         if avg_val_loss < best_val:
             best_val = avg_val_loss
-            torch.save({
+            checkpoint_data = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "epoch": epoch
-            }, os.path.join(save_dir, "best_coconut.pt"))
-            print(f"Saved new best model at epoch {epoch+1}")
+                "epoch": epoch,
+                "val_loss": avg_val_loss,
+                "stage": stage,
+                "n_latents": n_latents
+            }
+            # Save to main checkpoint directory
+            torch.save(checkpoint_data, os.path.join(save_path, "best_coconut.pt"))
+            # Save to Colab disk for easy download
+            torch.save(checkpoint_data, os.path.join(colab_save_dir, "best_coconut.pt"))
+            print(f"Saved new best model at epoch {epoch+1} (val_loss: {avg_val_loss:.4f})")
+            print(f"Checkpoint saved to: {colab_save_dir}/best_coconut.pt")
+            print(f"Download this file from Colab disk storage after training!")
 
 if __name__ == "__main__":
     main() 

@@ -7,7 +7,7 @@
 
 project: multicoco-coconut                # W&B project name
 name: multicoco-coconut-stage1plus        # W&B run name
-model_id: gpt2-xl                         # Huggingface model name for GPT-2
+model_id: gpt2-large                      # Huggingface model name for GPT-2 (A100 friendly)
 clip_id: openai/clip-vit-base-patch32     # Huggingface model name for CLIP
 
 # === Data paths ===
@@ -20,7 +20,7 @@ save_path: checkpoints/coconut_aokvqa     # Where to save checkpoints
 # === Training hyperparameters ===
 batch_size_training: 4
 batch_size_eval: 4
-num_epochs: 20
+num_epochs: 9                            # epochs_per_stage * max_latent_stage
 lr: 2e-5
 weight_decay: 0.01
 seed: 42
@@ -28,9 +28,13 @@ resume: 0
 max_length: 256                           # Max sequence length for GPT-2
 
 # === CoCoNuT-specific curriculum settings ===
-c_thought: 2              # Number of latent tokens per replaced reasoning step
-max_latent_stage: 4       # Maximum number of reasoning steps to replace with latents
-epochs_per_stage: 4       # Number of epochs per curriculum stage
+c_thought: 1                              # Number of latent tokens per replaced reasoning step
+max_latent_stage: 3                       # Maximum number of reasoning steps to replace with latents
+epochs_per_stage: 3                       # Number of epochs per curriculum stage
 
 # === Pretrained CoT checkpoint ===
-load_model_path: checkpoints/cot_aokvqa/best_cot.pt  # Path to best CoT checkpoint 
+load_model_path: checkpoints/cot_aokvqa/best_cot.pt  # Path to best CoT checkpoint
+
+# === Colab A100 Optimization ===
+# load_4bit: false                        # Uncomment if using gpt2-xl for memory
+# model_id: gpt2-xl                       # Uncomment for larger model 
